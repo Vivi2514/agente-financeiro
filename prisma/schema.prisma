@@ -7,92 +7,49 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum TransactionType {
-  INCOME
-  EXPENSE
-}
-
-enum InvoiceStatus {
-  OPEN
-  PAID
-}
-
 model Account {
   id           String        @id @default(cuid())
   name         String
-  bank         String
-  balance      Decimal       @default(0) @db.Decimal(12, 2)
+  type         String?
+  balance      Decimal       @default(0) @db.Decimal(10, 2)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-
   transactions Transaction[]
-  paidInvoices Invoice[]     @relation("InvoicePaymentAccount")
 
   @@map("accounts")
 }
 
-model Card {
+model CreditCard {
   id           String        @id @default(cuid())
   name         String
-  brand        String?
-  limit        Decimal       @default(0) @db.Decimal(12, 2)
-  closingDay   Int
-  dueDay       Int
+  limit        Decimal?      @db.Decimal(10, 2)
+  closingDay   Int?
+  dueDay       Int?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-
   transactions Transaction[]
-  invoices     Invoice[]
 
-  @@map("cards")
-}
-
-model Invoice {
-  id                String        @id @default(cuid())
-  cardId            String
-  month             Int
-  year              Int
-  total             Decimal       @default(0) @db.Decimal(12, 2)
-  status            InvoiceStatus @default(OPEN)
-  paidAt            DateTime?
-  paidFromAccountId String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-
-  card              Card          @relation(fields: [cardId], references: [id], onDelete: Cascade)
-  paidFromAccount   Account?      @relation("InvoicePaymentAccount", fields: [paidFromAccountId], references: [id])
-  transactions      Transaction[]
-
-  @@unique([cardId, month, year])
-  @@map("invoices")
+  @@map("credit_cards")
 }
 
 model Transaction {
-  id                String          @id @default(cuid())
-  title             String
-  amount            Decimal         @db.Decimal(12, 2)
-  type              TransactionType
-  category          String?
-  paymentMethod     String?
-  date              DateTime
+  id            String      @id @default(cuid())
+  description   String
+  amount        Decimal     @db.Decimal(10, 2)
+  type          String
+  category      String?
+  paymentMethod String?
+  installments  Int?
+  date          DateTime
 
-  accountId         String?
-  cardId            String?
-  invoiceId         String?
+  accountId     String?
+  account       Account?    @relation(fields: [accountId], references: [id], onDelete: SetNull)
 
-  installmentNumber Int?
-  installmentTotal  Int?
-  purchaseGroupId   String?
+  cardId        String?
+  card          CreditCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
 
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
-  account           Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  card              Card?           @relation(fields: [cardId], references: [id], onDelete: SetNull)
-  invoice           Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-
-  @@index([purchaseGroupId])
-  @@index([invoiceId])
-  @@index([cardId, date])
   @@map("transactions")
 }

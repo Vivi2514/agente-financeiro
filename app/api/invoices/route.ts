@@ -12,20 +12,46 @@ export async function GET() {
           },
         },
       },
-      orderBy: [
-        { year: "desc" },
-        { month: "desc" },
-      ],
+      orderBy: [{ year: "desc" }, { month: "desc" }],
     });
 
-    const formattedInvoices = invoices.map((invoice) => ({
-      ...invoice,
-      total: Number(invoice.total),
-      transactions: invoice.transactions.map((transaction) => ({
-        ...transaction,
-        amount: Number(transaction.amount),
-      })),
-    }));
+    const formattedInvoices = [];
+
+    for (const invoice of invoices) {
+      const recalculatedTotal = invoice.transactions.reduce(
+        (sum, transaction) => sum + Number(transaction.amount || 0),
+        0
+      );
+
+      const hasTransactions = invoice.transactions.length > 0;
+
+      // Corrige total salvo, se estiver diferente
+      if (Number(invoice.total || 0) !== recalculatedTotal) {
+        await prisma.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            total: recalculatedTotal,
+          },
+        });
+      }
+
+      // Apaga do banco fatura órfã e vazia
+      if (!hasTransactions && recalculatedTotal === 0) {
+        await prisma.invoice.delete({
+          where: { id: invoice.id },
+        });
+        continue;
+      }
+
+      formattedInvoices.push({
+        ...invoice,
+        total: recalculatedTotal,
+        transactions: invoice.transactions.map((transaction) => ({
+          ...transaction,
+          amount: Number(transaction.amount),
+        })),
+      });
+    }
 
     return NextResponse.json(formattedInvoices);
   } catch (error) {

@@ -70,8 +70,9 @@ export async function POST(req: Request) {
       type,
       category,
       paymentMethod,
-      creditType,
+      creditMode,
       date,
+      createdAt,
       accountId,
       cardId,
       installments,
@@ -93,20 +94,27 @@ export async function POST(req: Request) {
       );
     }
 
-    const parsedDate = safeParseDate(date);
+    const parsedDate = safeParseDate(date || createdAt);
 
     const isCreditInstallmentPurchase =
       paymentMethod === "credit_card" &&
-      creditType === "credit_installments" &&
+      creditMode === "parcelado" &&
       installments &&
       Number(installments) > 1;
 
     if (isCreditInstallmentPurchase) {
+      if (!cardId) {
+        return NextResponse.json(
+          { error: "Cartão é obrigatório para compra parcelada no crédito." },
+          { status: 400 }
+        );
+      }
+
       const totalInstallments = Number(installments);
       const purchaseGroupId = randomUUID();
       const baseDate = parsedDate;
 
-      const transactions: {
+      const transactionsData: {
         title: string;
         amount: number;
         type: TransactionType;
@@ -115,6 +123,7 @@ export async function POST(req: Request) {
         date: Date;
         accountId: string | null;
         cardId: string | null;
+        invoiceId: string | null;
         installmentNumber: number;
         installmentTotal: number;
         purchaseGroupId: string;
@@ -124,7 +133,30 @@ export async function POST(req: Request) {
         const installmentDate = new Date(baseDate);
         installmentDate.setMonth(baseDate.getMonth() + (i - 1));
 
-        transactions.push({
+        const month = installmentDate.getMonth() + 1;
+        const year = installmentDate.getFullYear();
+
+        let invoice = await prisma.invoice.findFirst({
+          where: {
+            cardId,
+            month,
+            year,
+          },
+        });
+
+        if (!invoice) {
+          invoice = await prisma.invoice.create({
+            data: {
+              cardId,
+              month,
+              year,
+              total: 0,
+              status: "OPEN",
+            },
+          });
+        }
+
+        transactionsData.push({
           title: `${title} (${i}/${totalInstallments})`,
           amount: Number(amount),
           type: normalizedType,
@@ -132,7 +164,8 @@ export async function POST(req: Request) {
           paymentMethod: paymentMethod || null,
           date: installmentDate,
           accountId: null,
-          cardId: cardId || null,
+          cardId,
+          invoiceId: invoice.id,
           installmentNumber: i,
           installmentTotal: totalInstallments,
           purchaseGroupId,
@@ -140,10 +173,62 @@ export async function POST(req: Request) {
       }
 
       await prisma.transaction.createMany({
-        data: transactions,
+        data: transactionsData,
       });
 
+      for (const transaction of transactionsData) {
+        if (!transaction.invoiceId) continue;
+
+        await prisma.invoice.update({
+          where: { id: transaction.invoiceId },
+          data: {
+            total: {
+              increment: transaction.amount,
+            },
+          },
+        });
+      }
+
       return NextResponse.json({ success: true });
+    }
+
+    let invoiceId: string | null = null;
+
+    const isCreditCardPurchase =
+      paymentMethod === "credit_card" && normalizedType === TransactionType.EXPENSE;
+
+    if (isCreditCardPurchase) {
+      if (!cardId) {
+        return NextResponse.json(
+          { error: "Cartão é obrigatório para compra no crédito." },
+          { status: 400 }
+        );
+      }
+
+      const month = parsedDate.getMonth() + 1;
+      const year = parsedDate.getFullYear();
+
+      let invoice = await prisma.invoice.findFirst({
+        where: {
+          cardId,
+          month,
+          year,
+        },
+      });
+
+      if (!invoice) {
+        invoice = await prisma.invoice.create({
+          data: {
+            cardId,
+            month,
+            year,
+            total: 0,
+            status: "OPEN",
+          },
+        });
+      }
+
+      invoiceId = invoice.id;
     }
 
     const transaction = await prisma.transaction.create({
@@ -154,10 +239,30 @@ export async function POST(req: Request) {
         category: category || null,
         paymentMethod: paymentMethod || null,
         date: parsedDate,
-        accountId: accountId || null,
-        cardId: cardId || null,
+        accountId:
+          paymentMethod === "credit_card" || paymentMethod === "voucher"
+            ? null
+            : accountId || null,
+        cardId: paymentMethod === "credit_card" ? cardId || null : null,
+        invoiceId,
+      },
+      include: {
+        account: true,
+        card: true,
+        invoice: true,
       },
     });
+
+    if (invoiceId && normalizedType === TransactionType.EXPENSE) {
+      await prisma.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          total: {
+            increment: Number(amount),
+          },
+        },
+      });
+    }
 
     return NextResponse.json(transaction);
   } catch (error) {
