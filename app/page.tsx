@@ -1138,8 +1138,8 @@ export default function DashboardPage() {
                       cx="50%"
                       cy="50%"
                       outerRadius={110}
-                      label={({ name, percentage }) =>
-                        `${name}: ${percentage.toFixed(0)}%`
+                      label={({ name, percent }) =>
+                        `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
                       }
                     >
                       {categoryChartData.map((entry, index) => (
@@ -1150,7 +1150,7 @@ export default function DashboardPage() {
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: number) => formatCurrency(value)}
+                      formatter={(value) => formatCurrency(Number(value ?? 0))}
                     />
                     <Legend
                       formatter={(value) => getCategoryLabel(String(value))}

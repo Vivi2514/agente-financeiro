@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomUUID } from "crypto";
+import { TransactionType } from "@prisma/client";
 
 function safeParseDate(value?: string) {
   if (!value || typeof value !== "string" || value.trim() === "") {
@@ -16,17 +17,21 @@ function safeParseDate(value?: string) {
   return parsed;
 }
 
-function normalizeTransactionType(value?: string) {
+function normalizeTransactionType(value?: string): TransactionType | null {
   if (!value) return null;
 
   const normalized = value.toLowerCase();
 
   if (normalized === "income" || normalized === "entrada") {
-    return "INCOME";
+    return TransactionType.INCOME;
   }
 
-  if (normalized === "expense" || normalized === "saida" || normalized === "saída") {
-    return "EXPENSE";
+  if (
+    normalized === "expense" ||
+    normalized === "saida" ||
+    normalized === "saída"
+  ) {
+    return TransactionType.EXPENSE;
   }
 
   return null;
@@ -101,7 +106,19 @@ export async function POST(req: Request) {
       const purchaseGroupId = randomUUID();
       const baseDate = parsedDate;
 
-      const transactions = [];
+      const transactions: {
+        title: string;
+        amount: number;
+        type: TransactionType;
+        category?: string | null;
+        paymentMethod?: string | null;
+        date: Date;
+        accountId: string | null;
+        cardId: string | null;
+        installmentNumber: number;
+        installmentTotal: number;
+        purchaseGroupId: string;
+      }[] = [];
 
       for (let i = 1; i <= totalInstallments; i++) {
         const installmentDate = new Date(baseDate);
@@ -111,8 +128,8 @@ export async function POST(req: Request) {
           title: `${title} (${i}/${totalInstallments})`,
           amount: Number(amount),
           type: normalizedType,
-          category,
-          paymentMethod,
+          category: category || null,
+          paymentMethod: paymentMethod || null,
           date: installmentDate,
           accountId: null,
           cardId: cardId || null,
@@ -134,8 +151,8 @@ export async function POST(req: Request) {
         title,
         amount: Number(amount),
         type: normalizedType,
-        category,
-        paymentMethod,
+        category: category || null,
+        paymentMethod: paymentMethod || null,
         date: parsedDate,
         accountId: accountId || null,
         cardId: cardId || null,

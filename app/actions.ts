@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { TransactionType } from "@prisma/client";
+import { TransactionType, Prisma } from "@prisma/client";
 
 // Criar transação
 export async function createTransaction(data: {
@@ -9,7 +9,7 @@ export async function createTransaction(data: {
   amount: number;
   type: TransactionType;
   category: string;
-  paymentMethod?: string; // agora é string
+  paymentMethod?: string;
   date: Date;
   accountId?: string | null;
   cardId?: string | null;
@@ -18,10 +18,11 @@ export async function createTransaction(data: {
     const transaction = await prisma.transaction.create({
       data: {
         title: data.title,
-        amount: data.amount,
+        // Convertemos o número para Decimal para bater com o seu schema.prisma
+        amount: new Prisma.Decimal(data.amount), 
         type: data.type,
         category: data.category,
-        paymentMethod: data.paymentMethod, // string simples
+        paymentMethod: data.paymentMethod,
         date: data.date,
         accountId: data.accountId,
         cardId: data.cardId,
@@ -31,7 +32,7 @@ export async function createTransaction(data: {
     return { success: true, transaction };
   } catch (error) {
     console.error("Erro ao criar transação:", error);
-    return { success: false };
+    return { success: false, error: "Falha ao criar transação" };
   }
 }
 
@@ -45,6 +46,6 @@ export async function deleteTransaction(id: string) {
     return { success: true };
   } catch (error) {
     console.error("Erro ao deletar transação:", error);
-    return { success: false };
+    return { success: false, error: "Falha ao deletar transação" };
   }
 }
