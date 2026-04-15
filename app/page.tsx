@@ -1,4 +1,5 @@
-﻿"use client";
+﻿// force deploy
+"use client";
 
 import LogoutButton from "@/components/logout-button";
 import Link from "next/link";
