@@ -1,31 +1,30 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/current-user";
 
-type Params = {
-  params: {
+type RouteContext = {
+  params: Promise<{
     id: string;
-  };
+  }>;
 };
 
 // ========================
 // ATUALIZAR CONTA (PATCH)
 // ========================
 export async function PATCH(
-  req: Request,
-  context: Params
+  req: NextRequest,
+  context: RouteContext
 ) {
-  const { params } = context;
-
   try {
     const user = await requireCurrentUser();
+    const { id } = await context.params;
     const body = await req.json();
 
     const { name, bank, balance } = body;
 
     const account = await prisma.accounts.findFirst({
       where: {
-        id: params.id,
+        id,
         userId: user.id,
       },
     });
@@ -38,12 +37,11 @@ export async function PATCH(
     }
 
     const updatedAccount = await prisma.accounts.update({
-      where: { id: params.id },
+      where: { id },
       data: {
         name: name !== undefined ? String(name).trim() : account.name,
         bank: bank !== undefined ? String(bank).trim() : account.bank,
-        balance:
-          balance !== undefined ? Number(balance) : account.balance,
+        balance: balance !== undefined ? Number(balance) : account.balance,
         updatedAt: new Date(),
       },
     });
@@ -65,17 +63,16 @@ export async function PATCH(
 // EXCLUIR CONTA (DELETE)
 // ========================
 export async function DELETE(
-  _: Request,
-  context: Params
+  _req: NextRequest,
+  context: RouteContext
 ) {
-  const { params } = context;
-
   try {
     const user = await requireCurrentUser();
+    const { id } = await context.params;
 
     const account = await prisma.accounts.findFirst({
       where: {
-        id: params.id,
+        id,
         userId: user.id,
       },
     });
@@ -89,22 +86,21 @@ export async function DELETE(
 
     const hasTransactions = await prisma.transaction.findFirst({
       where: {
-        accountId: params.id,
+        accountId: id,
       },
     });
 
     if (hasTransactions) {
       return NextResponse.json(
         {
-          error:
-            "Não é possível excluir conta com transações vinculadas",
+          error: "Não é possível excluir conta com transações vinculadas",
         },
         { status: 400 }
       );
     }
 
     await prisma.accounts.delete({
-      where: { id: params.id },
+      where: { id },
     });
 
     return NextResponse.json({ success: true });
