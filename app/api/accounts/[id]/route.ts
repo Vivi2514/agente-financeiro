@@ -11,7 +11,12 @@ type Params = {
 // ========================
 // ATUALIZAR CONTA (PATCH)
 // ========================
-export async function PATCH(req: Request, { params }: Params) {
+export async function PATCH(
+  req: Request,
+  context: Params
+) {
+  const { params } = context;
+
   try {
     const user = await requireCurrentUser();
     const body = await req.json();
@@ -59,7 +64,12 @@ export async function PATCH(req: Request, { params }: Params) {
 // ========================
 // EXCLUIR CONTA (DELETE)
 // ========================
-export async function DELETE(_: Request, { params }: Params) {
+export async function DELETE(
+  _: Request,
+  context: Params
+) {
+  const { params } = context;
+
   try {
     const user = await requireCurrentUser();
 
@@ -77,7 +87,6 @@ export async function DELETE(_: Request, { params }: Params) {
       );
     }
 
-    // Segurança: não permitir excluir conta com transações
     const hasTransactions = await prisma.transaction.findFirst({
       where: {
         accountId: params.id,

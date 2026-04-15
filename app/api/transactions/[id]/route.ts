@@ -3,6 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { InvoiceStatus, TransactionType } from "@prisma/client";
 import { requireCurrentUser } from "@/lib/current-user";
 
+type Params = {
+  params: {
+    id: string;
+  };
+};
+
 function normalizeTransactionType(value?: string): TransactionType | null {
   if (!value) return null;
 
@@ -132,11 +138,13 @@ async function recalculateInvoiceTotal(invoiceId: string, userId: string) {
 
 export async function PATCH(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  context: Params
 ) {
+  const { params } = context;
+
   try {
     const user = await requireCurrentUser();
-    const { id } = await params;
+    const { id } = params;
     const body = await req.json();
 
     const {
@@ -379,11 +387,13 @@ export async function PATCH(
 
 export async function DELETE(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  context: Params
 ) {
+  const { params } = context;
+
   try {
     const user = await requireCurrentUser();
-    const { id } = await params;
+    const { id } = params;
     const { deleteGroup } = await req.json().catch(() => ({
       deleteGroup: false,
     }));
