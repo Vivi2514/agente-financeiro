@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomUUID } from "crypto";
 import { TransactionType } from "@prisma/client";
+import { requireCurrentUser } from "@/lib/current-user";
 
 function safeParseDate(value?: string) {
   if (!value || typeof value !== "string" || value.trim() === "") {
@@ -37,9 +38,57 @@ function normalizeTransactionType(value?: string): TransactionType | null {
   return null;
 }
 
+function normalizeBoolean(value: unknown) {
+  if (typeof value === "boolean") return value;
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+
+  if (typeof value === "number") {
+    return value === 1;
+  }
+
+  return false;
+}
+
+function shouldAffectAccountBalance(params: {
+  accountId?: string | null;
+  paymentMethod?: string | null;
+}) {
+  const { accountId, paymentMethod } = params;
+
+  if (!accountId) return false;
+
+  return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
+}
+
+async function applyAccountBalanceChange(params: {
+  accountId: string;
+  type: TransactionType;
+  amount: number;
+}) {
+  const { accountId, type, amount } = params;
+
+  await prisma.accounts.update({
+    where: { id: accountId },
+    data: {
+      balance: {
+        increment: type === TransactionType.INCOME ? amount : -amount,
+      },
+    },
+  });
+}
+
 export async function GET() {
   try {
+    const user = await requireCurrentUser();
+
     const transactions = await prisma.transaction.findMany({
+      where: {
+        userId: user.id,
+      },
       include: {
         account: true,
         card: true,
@@ -50,11 +99,16 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json(transactions);
+    return NextResponse.json(
+      transactions.map((transaction) => ({
+        ...transaction,
+        amount: Number(transaction.amount),
+      }))
+    );
   } catch (error) {
     console.error("Erro ao buscar transações:", error);
     return NextResponse.json(
-      { error: "Erro ao buscar transações" },
+      { error: "Erro ao buscar transações", details: String(error) },
       { status: 500 }
     );
   }
@@ -62,6 +116,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const user = await requireCurrentUser();
     const body = await req.json();
 
     const {
@@ -76,9 +131,10 @@ export async function POST(req: Request) {
       accountId,
       cardId,
       installments,
+      isFixed,
     } = body;
 
-    if (!title || !amount || !type) {
+    if (!title || amount === undefined || !type) {
       return NextResponse.json(
         { error: "Título, valor e tipo são obrigatórios." },
         { status: 400 }
@@ -95,43 +151,89 @@ export async function POST(req: Request) {
     }
 
     const parsedDate = safeParseDate(date || createdAt);
+    const numericAmount = Number(amount);
+    const normalizedIsFixed = normalizeBoolean(isFixed);
 
-    const isCreditInstallmentPurchase =
-      paymentMethod === "credit_card" &&
+    if (Number.isNaN(numericAmount) || numericAmount <= 0) {
+      return NextResponse.json(
+        { error: "Valor inválido." },
+        { status: 400 }
+      );
+    }
+
+    const isExpense = normalizedType === TransactionType.EXPENSE;
+    const isCreditCardPayment = paymentMethod === "credit_card";
+    const totalInstallments = Number(installments || 1);
+
+    const isInstallmentPurchase =
+      isCreditCardPayment &&
       creditMode === "parcelado" &&
-      installments &&
-      Number(installments) > 1;
+      totalInstallments > 1 &&
+      isExpense;
 
-    if (isCreditInstallmentPurchase) {
-      if (!cardId) {
+    if (isCreditCardPayment && !cardId) {
+      return NextResponse.json(
+        { error: "Selecione um cartão para compras no crédito." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      !isCreditCardPayment &&
+      paymentMethod !== "voucher" &&
+      (!accountId || accountId === "")
+    ) {
+      return NextResponse.json(
+        { error: "Selecione uma conta." },
+        { status: 400 }
+      );
+    }
+
+    if (accountId) {
+      const account = await prisma.accounts.findFirst({
+        where: {
+          id: accountId,
+          userId: user.id,
+        },
+        select: { id: true },
+      });
+
+      if (!account) {
         return NextResponse.json(
-          { error: "Cartão é obrigatório para compra parcelada no crédito." },
-          { status: 400 }
+          { error: "Conta não encontrada ou sem permissão." },
+          { status: 404 }
         );
       }
+    }
 
-      const totalInstallments = Number(installments);
+    if (cardId) {
+      const card = await prisma.cards.findFirst({
+        where: {
+          id: cardId,
+          userId: user.id,
+        },
+        select: { id: true },
+      });
+
+      if (!card) {
+        return NextResponse.json(
+          { error: "Cartão não encontrado ou sem permissão." },
+          { status: 404 }
+        );
+      }
+    }
+
+    if (isInstallmentPurchase) {
       const purchaseGroupId = randomUUID();
-      const baseDate = parsedDate;
+      const baseInstallmentAmount = Number(
+        (numericAmount / totalInstallments).toFixed(2)
+      );
 
-      const transactionsData: {
-        title: string;
-        amount: number;
-        type: TransactionType;
-        category?: string | null;
-        paymentMethod?: string | null;
-        date: Date;
-        accountId: string | null;
-        cardId: string | null;
-        invoiceId: string | null;
-        installmentNumber: number;
-        installmentTotal: number;
-        purchaseGroupId: string;
-      }[] = [];
+      const createdTransactions = [];
 
       for (let i = 1; i <= totalInstallments; i++) {
-        const installmentDate = new Date(baseDate);
-        installmentDate.setMonth(baseDate.getMonth() + (i - 1));
+        const installmentDate = new Date(parsedDate);
+        installmentDate.setMonth(parsedDate.getMonth() + (i - 1));
 
         const month = installmentDate.getMonth() + 1;
         const year = installmentDate.getFullYear();
@@ -141,6 +243,7 @@ export async function POST(req: Request) {
             cardId,
             month,
             year,
+            userId: user.id,
           },
         });
 
@@ -152,59 +255,69 @@ export async function POST(req: Request) {
               year,
               total: 0,
               status: "OPEN",
+              userId: user.id,
             },
           });
         }
 
-        transactionsData.push({
-          title: `${title} (${i}/${totalInstallments})`,
-          amount: Number(amount),
-          type: normalizedType,
-          category: category || null,
-          paymentMethod: paymentMethod || null,
-          date: installmentDate,
-          accountId: null,
-          cardId,
-          invoiceId: invoice.id,
-          installmentNumber: i,
-          installmentTotal: totalInstallments,
-          purchaseGroupId,
+        const installmentAmount =
+          i < totalInstallments
+            ? baseInstallmentAmount
+            : Number(
+                (
+                  numericAmount -
+                  baseInstallmentAmount * (totalInstallments - 1)
+                ).toFixed(2)
+              );
+
+        const transaction = await prisma.transaction.create({
+          data: {
+            title: `${String(title).trim()} (${i}/${totalInstallments})`,
+            amount: installmentAmount,
+            type: normalizedType,
+            category: category || null,
+            paymentMethod,
+            isFixed: normalizedIsFixed,
+            date: installmentDate,
+            accountId: null,
+            cardId,
+            invoiceId: invoice.id,
+            installmentNumber: i,
+            installmentTotal: totalInstallments,
+            purchaseGroupId,
+            userId: user.id,
+          },
+          include: {
+            account: true,
+            card: true,
+            invoice: true,
+          },
         });
-      }
-
-      await prisma.transaction.createMany({
-        data: transactionsData,
-      });
-
-      for (const transaction of transactionsData) {
-        if (!transaction.invoiceId) continue;
 
         await prisma.invoice.update({
-          where: { id: transaction.invoiceId },
+          where: { id: invoice.id },
           data: {
             total: {
-              increment: transaction.amount,
+              increment: installmentAmount,
             },
           },
         });
+
+        createdTransactions.push({
+          ...transaction,
+          amount: Number(transaction.amount),
+        });
       }
 
-      return NextResponse.json({ success: true });
+      return NextResponse.json(
+        { success: true, transactions: createdTransactions },
+        { status: 201 }
+      );
     }
 
     let invoiceId: string | null = null;
 
-    const isCreditCardPurchase =
-      paymentMethod === "credit_card" && normalizedType === TransactionType.EXPENSE;
-
-    if (isCreditCardPurchase) {
-      if (!cardId) {
-        return NextResponse.json(
-          { error: "Cartão é obrigatório para compra no crédito." },
-          { status: 400 }
-        );
-      }
-
+    if (isCreditCardPayment && isExpense) {
       const month = parsedDate.getMonth() + 1;
       const year = parsedDate.getFullYear();
 
@@ -213,6 +326,7 @@ export async function POST(req: Request) {
           cardId,
           month,
           year,
+          userId: user.id,
         },
       });
 
@@ -224,6 +338,7 @@ export async function POST(req: Request) {
             year,
             total: 0,
             status: "OPEN",
+            userId: user.id,
           },
         });
       }
@@ -231,20 +346,27 @@ export async function POST(req: Request) {
       invoiceId = invoice.id;
     }
 
+    const nextAccountId =
+      isCreditCardPayment || paymentMethod === "voucher"
+        ? null
+        : accountId || null;
+
     const transaction = await prisma.transaction.create({
       data: {
-        title,
-        amount: Number(amount),
+        title: String(title).trim(),
+        amount: numericAmount,
         type: normalizedType,
         category: category || null,
         paymentMethod: paymentMethod || null,
+        isFixed: normalizedIsFixed,
         date: parsedDate,
-        accountId:
-          paymentMethod === "credit_card" || paymentMethod === "voucher"
-            ? null
-            : accountId || null,
-        cardId: paymentMethod === "credit_card" ? cardId || null : null,
+        accountId: nextAccountId,
+        cardId: isCreditCardPayment ? cardId || null : null,
         invoiceId,
+        installmentNumber: null,
+        installmentTotal: null,
+        purchaseGroupId: null,
+        userId: user.id,
       },
       include: {
         account: true,
@@ -253,22 +375,42 @@ export async function POST(req: Request) {
       },
     });
 
-    if (invoiceId && normalizedType === TransactionType.EXPENSE) {
+    if (invoiceId && isExpense) {
       await prisma.invoice.update({
         where: { id: invoiceId },
         data: {
           total: {
-            increment: Number(amount),
+            increment: numericAmount,
           },
         },
       });
     }
 
-    return NextResponse.json(transaction);
+    if (
+      shouldAffectAccountBalance({
+        accountId: nextAccountId,
+        paymentMethod: paymentMethod || null,
+      }) &&
+      nextAccountId
+    ) {
+      await applyAccountBalanceChange({
+        accountId: nextAccountId,
+        type: normalizedType,
+        amount: numericAmount,
+      });
+    }
+
+    return NextResponse.json(
+      {
+        ...transaction,
+        amount: Number(transaction.amount),
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Erro ao criar transação:", error);
     return NextResponse.json(
-      { error: "Erro ao criar transação" },
+      { error: "Erro ao criar transação", details: String(error) },
       { status: 500 }
     );
   }

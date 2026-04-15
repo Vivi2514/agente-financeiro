@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/current-user";
 
 export async function POST(req: Request) {
   try {
+    const user = await requireCurrentUser();
     const body = await req.json();
 
     const invoiceId =
@@ -18,8 +20,11 @@ export async function POST(req: Request) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const invoice = await tx.invoice.findUnique({
-        where: { id: invoiceId },
+      const invoice = await tx.invoice.findFirst({
+        where: {
+          id: invoiceId,
+          userId: user.id,
+        },
       });
 
       if (!invoice) {
@@ -30,8 +35,11 @@ export async function POST(req: Request) {
         throw new Error("Essa fatura já foi paga");
       }
 
-      const account = await tx.account.findUnique({
-        where: { id: accountId },
+      const account = await tx.accounts.findFirst({
+        where: {
+          id: accountId,
+          userId: user.id,
+        },
       });
 
       if (!account) {
@@ -45,10 +53,13 @@ export async function POST(req: Request) {
         throw new Error("Saldo insuficiente para pagar a fatura");
       }
 
-      const updatedAccount = await tx.account.update({
+      const updatedAccount = await tx.accounts.update({
         where: { id: accountId },
         data: {
-          balance: accountBalance - invoiceTotal,
+          balance: {
+            decrement: invoiceTotal,
+          },
+          updatedAt: new Date(),
         },
       });
 

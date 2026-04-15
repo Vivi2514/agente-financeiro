@@ -1,26 +1,31 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/current-user";
 
 export async function GET() {
   try {
-    const accounts = await prisma.account.findMany({
+    const user = await requireCurrentUser();
+
+    const accounts = await prisma.accounts.findMany({
+      where: { userId: user.id },
       orderBy: { createdAt: "desc" },
     });
 
-    const formattedAccounts = accounts.map((account) => ({
-      id: account.id,
-      name: account.name,
-      type: account.bank, // mantém compatibilidade com a tela
-      balance: Number(account.balance),
-      createdAt: account.createdAt,
-      updatedAt: account.updatedAt,
-    }));
-
-    return NextResponse.json(formattedAccounts);
+    return NextResponse.json(
+      accounts.map((account) => ({
+        id: account.id,
+        name: account.name,
+        bank: account.bank,
+        balance: Number(account.balance),
+        userId: account.userId,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      }))
+    );
   } catch (error) {
     console.error("Erro ao buscar contas:", error);
     return NextResponse.json(
-      { error: "Erro ao buscar contas" },
+      { error: "Erro ao buscar contas", details: String(error) },
       { status: 500 }
     );
   }
@@ -28,30 +33,49 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const user = await requireCurrentUser();
     const body = await req.json();
 
-    const account = await prisma.account.create({
+    const { name, type, bank, balance } = body;
+
+    if (!name || balance === undefined) {
+      return NextResponse.json(
+        { error: "Nome e saldo são obrigatórios." },
+        { status: 400 }
+      );
+    }
+
+    const account = await prisma.accounts.create({
       data: {
-        name: body.name,
-        bank: body.type ?? "Conta",
-        balance: body.balance ?? 0,
+        id: crypto.randomUUID(),
+        name: String(name).trim(),
+        bank: bank
+          ? String(bank).trim()
+          : type
+          ? String(type).trim()
+          : null,
+        balance: Number(balance),
+        userId: user.id,
+        updatedAt: new Date(),
       },
     });
 
-    const formattedAccount = {
-      id: account.id,
-      name: account.name,
-      type: account.bank,
-      balance: Number(account.balance),
-      createdAt: account.createdAt,
-      updatedAt: account.updatedAt,
-    };
-
-    return NextResponse.json(formattedAccount, { status: 201 });
+    return NextResponse.json(
+      {
+        id: account.id,
+        name: account.name,
+        bank: account.bank,
+        balance: Number(account.balance),
+        userId: account.userId,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Erro ao criar conta:", error);
     return NextResponse.json(
-      { error: "Erro ao criar conta" },
+      { error: "Erro ao criar conta", details: String(error) },
       { status: 500 }
     );
   }

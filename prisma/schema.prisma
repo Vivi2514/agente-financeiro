@@ -7,49 +7,163 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Account {
-  id           String        @id @default(cuid())
-  name         String
-  type         String?
-  balance      Decimal       @default(0) @db.Decimal(10, 2)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  transactions Transaction[]
-
-  @@map("accounts")
-}
-
-model CreditCard {
-  id           String        @id @default(cuid())
-  name         String
-  limit        Decimal?      @db.Decimal(10, 2)
-  closingDay   Int?
-  dueDay       Int?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  transactions Transaction[]
-
-  @@map("credit_cards")
-}
-
 model Transaction {
-  id            String      @id @default(cuid())
-  description   String
-  amount        Decimal     @db.Decimal(10, 2)
-  type          String
-  category      String?
-  paymentMethod String?
-  installments  Int?
-  date          DateTime
+  id                String          @id @default(cuid())
+  title             String
+  amount            Decimal         @db.Decimal(10, 2)
+  type              TransactionType
+  date              DateTime
+  isFixed           Boolean         @default(false)
+  accountId         String?
+  cardId            String?
+  userId            String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  invoiceId         String?
+  paymentMethod     String?
+  category          String?
+  installmentNumber Int?
+  installmentTotal  Int?
+  purchaseGroupId   String?
+  account           accounts?       @relation(fields: [accountId], references: [id])
+  card              cards?          @relation(fields: [cardId], references: [id])
+  invoice           Invoice?        @relation(fields: [invoiceId], references: [id])
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  accountId     String?
-  account       Account?    @relation(fields: [accountId], references: [id], onDelete: SetNull)
-
-  cardId        String?
-  card          CreditCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
-
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-
+  @@index([userId])
+  @@index([accountId])
+  @@index([cardId])
+  @@index([invoiceId])
   @@map("transactions")
+}
+
+model Invoice {
+  id                String        @id @default(cuid())
+  month             Int
+  year              Int
+  total             Decimal       @default(0) @db.Decimal(10, 2)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  cardId            String
+  userId            String
+  paidAt            DateTime?
+  paidFromAccountId String?
+  status            InvoiceStatus @default(OPEN)
+  card              cards         @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  paidFromAccount   accounts?     @relation("PaidInvoiceAccount", fields: [paidFromAccountId], references: [id])
+  transactions      Transaction[]
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([cardId, month, year])
+  @@index([userId])
+  @@index([cardId])
+  @@map("invoices")
+}
+
+model RecurringTransaction {
+  id            String          @id @default(cuid())
+  title         String
+  amount        Decimal         @db.Decimal(10, 2)
+  type          TransactionType
+  category      String?
+  isFixed       Boolean         @default(false)
+  paymentMethod String?
+  accountId     String?
+  cardId        String?
+  userId        String
+  dayOfMonth    Int
+  active        Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  account       accounts?       @relation(fields: [accountId], references: [id])
+  card          cards?          @relation(fields: [cardId], references: [id])
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([accountId])
+  @@index([cardId])
+  @@map("recurring_transactions")
+}
+
+model accounts {
+  id                    String                 @id
+  name                  String
+  bank                  String?
+  balance               Decimal                @default(0) @db.Decimal(10, 2)
+  userId                String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime
+  paidInvoices          Invoice[]              @relation("PaidInvoiceAccount")
+  recurringTransactions RecurringTransaction[]
+  transactions          Transaction[]
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model cards {
+  id                    String                 @id
+  name                  String
+  brand                 String?
+  limit                 Decimal?               @db.Decimal(10, 2)
+  closingDay            Int?
+  dueDay                Int?
+  userId                String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime
+  invoices              Invoice[]
+  recurringTransactions RecurringTransaction[]
+  transactions          Transaction[]
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum InvoiceStatus {
+  OPEN
+  PAID
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model User {
+  id                    String                 @id @default(cuid())
+  name                  String?
+  email                 String                 @unique
+  password              String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  accounts              accounts[]
+  cards                 cards[]
+  transactions          Transaction[]
+  invoices              Invoice[]
+  recurringTransactions RecurringTransaction[]
+  simulationHistories   SimulationHistory[]
+}
+
+model SimulationHistory {
+  id                          String   @id @default(cuid())
+  title                       String
+  purchaseType                String
+  totalAmount                 Float
+  installmentCount            Int?
+  installmentAmount           Float?
+  recommendedCardName         String?
+  recommendationStatus        String
+  recommendationTitle         String
+  recommendationReason        String
+  lowestProjectedMonthLabel   String?
+  lowestProjectedBalance      Float?
+  limitUsagePercent           Float?
+  remainingLimitAfterPurchase Float?
+  selectedMonth               String?
+  userId                      String
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  user                        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

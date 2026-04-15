@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUserId } from "@/lib/current-user";
 
 function parseCurrencyToDecimal(value: string | number) {
   if (typeof value === "number") {
@@ -34,11 +35,14 @@ type CreateAccountInput = {
 };
 
 export async function createAccount(data: CreateAccountInput) {
+  const userId = await requireCurrentUserId();
+
   await prisma.account.create({
     data: {
-      name: data.name,
+      name: data.name.trim(),
       type: normalizeOptionalString(data.type),
       balance: parseCurrencyToDecimal(data.balance || "0"),
+      userId,
     },
   });
 
@@ -53,12 +57,15 @@ type CreateCardInput = {
 };
 
 export async function createCard(data: CreateCardInput) {
+  const userId = await requireCurrentUserId();
+
   await prisma.creditCard.create({
     data: {
-      name: data.name,
+      name: data.name.trim(),
       limit: data.limit ? parseCurrencyToDecimal(data.limit) : null,
       closingDay: data.closingDay ? Number(data.closingDay) : null,
       dueDay: data.dueDay ? Number(data.dueDay) : null,
+      userId,
     },
   });
 
@@ -78,15 +85,45 @@ type CreateTransactionInput = {
 };
 
 export async function createTransaction(data: CreateTransactionInput) {
+  const userId = await requireCurrentUserId();
+
   const paymentMethod = data.paymentMethod || "cash";
   const isCreditCard = paymentMethod === "credit_card";
 
   const accountId = isCreditCard ? null : normalizeOptionalString(data.accountId);
   const cardId = isCreditCard ? normalizeOptionalString(data.cardId) : null;
 
+  if (accountId) {
+    const account = await prisma.account.findFirst({
+      where: {
+        id: accountId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!account) {
+      throw new Error("Conta não encontrada ou sem permissão.");
+    }
+  }
+
+  if (cardId) {
+    const card = await prisma.creditCard.findFirst({
+      where: {
+        id: cardId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!card) {
+      throw new Error("Cartão não encontrado ou sem permissão.");
+    }
+  }
+
   await prisma.transaction.create({
     data: {
-      description: data.description,
+      description: data.description.trim(),
       amount: parseCurrencyToDecimal(data.amount),
       type: data.type,
       category: normalizeOptionalString(data.category),
@@ -95,6 +132,7 @@ export async function createTransaction(data: CreateTransactionInput) {
       cardId,
       installments: data.installments ? Number(data.installments) : null,
       date: new Date(data.date),
+      userId,
     },
     include: {
       account: true,
@@ -119,16 +157,58 @@ type UpdateTransactionInput = {
 };
 
 export async function updateTransaction(data: UpdateTransactionInput) {
+  const userId = await requireCurrentUserId();
+
+  const existingTransaction = await prisma.transaction.findFirst({
+    where: {
+      id: data.id,
+      userId,
+    },
+    select: { id: true },
+  });
+
+  if (!existingTransaction) {
+    throw new Error("Transação não encontrada ou sem permissão.");
+  }
+
   const paymentMethod = data.paymentMethod || "cash";
   const isCreditCard = paymentMethod === "credit_card";
 
   const accountId = isCreditCard ? null : normalizeOptionalString(data.accountId);
   const cardId = isCreditCard ? normalizeOptionalString(data.cardId) : null;
 
+  if (accountId) {
+    const account = await prisma.account.findFirst({
+      where: {
+        id: accountId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!account) {
+      throw new Error("Conta não encontrada ou sem permissão.");
+    }
+  }
+
+  if (cardId) {
+    const card = await prisma.creditCard.findFirst({
+      where: {
+        id: cardId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!card) {
+      throw new Error("Cartão não encontrado ou sem permissão.");
+    }
+  }
+
   await prisma.transaction.update({
     where: { id: data.id },
     data: {
-      description: data.description,
+      description: data.description.trim(),
       amount: parseCurrencyToDecimal(data.amount),
       type: data.type,
       category: normalizeOptionalString(data.category),
@@ -144,6 +224,20 @@ export async function updateTransaction(data: UpdateTransactionInput) {
 }
 
 export async function deleteTransaction(id: string) {
+  const userId = await requireCurrentUserId();
+
+  const transaction = await prisma.transaction.findFirst({
+    where: {
+      id,
+      userId,
+    },
+    select: { id: true },
+  });
+
+  if (!transaction) {
+    throw new Error("Transação não encontrada ou sem permissão.");
+  }
+
   await prisma.transaction.delete({
     where: { id },
   });
@@ -152,14 +246,19 @@ export async function deleteTransaction(id: string) {
 }
 
 export async function getDashboardData() {
+  const userId = await requireCurrentUserId();
+
   const [accounts, cards, transactions] = await Promise.all([
     prisma.account.findMany({
+      where: { userId },
       orderBy: { createdAt: "desc" },
     }),
     prisma.creditCard.findMany({
+      where: { userId },
       orderBy: { createdAt: "desc" },
     }),
     prisma.transaction.findMany({
+      where: { userId },
       include: {
         account: true,
         card: true,
