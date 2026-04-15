@@ -86,13 +86,13 @@ model RecurringTransaction {
 }
 
 model accounts {
-  id                    String                 @id
+  id                    String                 @id @default(cuid())
   name                  String
   bank                  String?
   balance               Decimal                @default(0) @db.Decimal(10, 2)
   userId                String
   createdAt             DateTime               @default(now())
-  updatedAt             DateTime
+  updatedAt             DateTime               @updatedAt
   paidInvoices          Invoice[]              @relation("PaidInvoiceAccount")
   recurringTransactions RecurringTransaction[]
   transactions          Transaction[]
@@ -102,7 +102,7 @@ model accounts {
 }
 
 model cards {
-  id                    String                 @id
+  id                    String                 @id @default(cuid())
   name                  String
   brand                 String?
   limit                 Decimal?               @db.Decimal(10, 2)
@@ -110,7 +110,7 @@ model cards {
   dueDay                Int?
   userId                String
   createdAt             DateTime               @default(now())
-  updatedAt             DateTime
+  updatedAt             DateTime               @updatedAt
   invoices              Invoice[]
   recurringTransactions RecurringTransaction[]
   transactions          Transaction[]
