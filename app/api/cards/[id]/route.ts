@@ -1,22 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/current-user";
 
-type Params = {
-  params: {
-    id: string;
-  };
+type RouteContext = {
+  params: Promise<{ id: string }>;
 };
 
 export async function PATCH(
-  req: Request,
-  context: Params
+  req: NextRequest,
+  context: RouteContext
 ) {
-  const { params } = context;
-
   try {
     const user = await requireCurrentUser();
-    const { id } = params;
+    const { id } = await context.params;
     const body = await req.json();
 
     const { name, limit, closingDay, dueDay, brand } = body;
@@ -65,14 +61,12 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: Request,
-  context: Params
+  _req: NextRequest,
+  context: RouteContext
 ) {
-  const { params } = context;
-
   try {
     const user = await requireCurrentUser();
-    const { id } = params;
+    const { id } = await context.params;
 
     const card = await prisma.cards.findFirst({
       where: {
