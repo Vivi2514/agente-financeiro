@@ -528,6 +528,7 @@ export default function DashboardPage() {
   const [savedCutPlan, setSavedCutPlan] = useState<Record<string, number>>({});
   const [alertStates, setAlertStates] = useState<Record<string, AlertStateItem>>({});
   const [dailyReviewHistory, setDailyReviewHistory] = useState<Record<string, DailyReviewEntry>>({});
+  const [resettingData, setResettingData] = useState(false);
 
   function showToast(
     title: string,
@@ -541,6 +542,70 @@ export default function DashboardPage() {
       tone,
     });
   }
+
+  async function handleResetAllData() {
+    const confirmed = window.confirm(
+      "Isso vai apagar todas as suas transações, recorrências, faturas, cartões, contas e histórico de simulações. Deseja continuar?"
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setResettingData(true);
+
+      const response = await fetch("/api/reset-data", {
+        method: "POST",
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Não foi possível resetar seus dados.");
+      }
+
+      setGoals({});
+      setGoalInputs({});
+      setSavedCutPlan({});
+      setAlertStates({});
+      setDailyReviewHistory({});
+      setSimulationValue("");
+      setInstallmentSimulationValue("");
+      setInstallmentSimulationCount("3");
+      setInstallmentSimulationCardId("");
+      setSimulatedCutCategory(null);
+      setSimulatedCutAmount(0);
+      setSimulatedCutPercent(null);
+      setCustomCutInput({});
+      setDeleteConfirm({
+        open: false,
+        id: null,
+        title: "",
+      });
+      setEditingRecurringId(null);
+
+      localStorage.removeItem(getGoalsStorageKey(selectedMonth));
+      localStorage.removeItem(getCutPlanStorageKey(selectedMonth));
+      localStorage.removeItem(getAlertStateStorageKey(selectedMonth));
+      localStorage.removeItem(getDailyReviewStorageKey(selectedMonth));
+
+      await loadDashboardData();
+
+      showToast(
+        "Dados apagados",
+        "Seu app foi resetado e já está pronto para começar do zero.",
+        "success"
+      );
+    } catch (error) {
+      showToast(
+        "Erro ao resetar",
+        error instanceof Error ? error.message : "Tente novamente.",
+        "error"
+      );
+    } finally {
+      setResettingData(false);
+    }
+  }
+
 
  useEffect(() => {
   if (!toast.visible) return;
@@ -3860,6 +3925,15 @@ const dataHealthSummary = useMemo(() => {
   >
     Ver faturas
   </Link>
+
+  <button
+    type="button"
+    onClick={handleResetAllData}
+    disabled={resettingData}
+    className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3.5 text-sm font-semibold text-rose-700 transition duration-200 hover:-translate-y-0.5 hover:bg-rose-100 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
+  >
+    {resettingData ? "Resetando..." : "Resetar dados"}
+  </button>
 
   <LogoutButton />
 </div>
