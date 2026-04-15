@@ -47,11 +47,17 @@ export async function POST(): Promise<Response> {
       message: "Dados apagados com sucesso.",
       deleted: result,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Erro ao resetar dados do usuário:", error);
 
+    const message =
+      error instanceof Error ? error.message : "Erro desconhecido ao resetar dados.";
+
     return NextResponse.json(
-      { error: "Não foi possível resetar seus dados." },
+      {
+        error: "Não foi possível resetar seus dados.",
+        details: message,
+      },
       { status: 500 }
     );
   }
