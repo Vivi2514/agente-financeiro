@@ -129,6 +129,31 @@ type FutureInstallmentMonthGroup = {
   projectedBalance: number;
 };
 
+
+type CategoryOutOfPaceItem = {
+  category: string;
+  goal: number;
+  plannedCut: number;
+  adjustedGoal: number;
+  spent: number;
+  remaining: number;
+  adjustedRemaining: number;
+  percentage: number;
+  adjustedPercentage: number;
+  exceeded: boolean;
+  adjustedExceeded: boolean;
+  elapsedDays: number;
+  elapsedRatio: number;
+  shouldHaveSpent: number;
+  paceDifference: number;
+  paceStatus: "controlled" | "attention" | "off_track" | "future";
+  shortLabel: string;
+  shortStatus: string;
+  actionHint: string;
+  recoveryHint: string;
+};
+
+
 type SmartAlert = {
   id: string;
   title: string;
@@ -492,30 +517,6 @@ type SimulationHistoryItem = {
   selectedMonth?: string | null;
   createdAt: string;
 };
-
-type CategoryOutOfPaceItem = {
-  category: string;
-  goal: number;
-  plannedCut: number;
-  adjustedGoal: number;
-  spent: number;
-  remaining: number;
-  adjustedRemaining: number;
-  percentage: number;
-  adjustedPercentage: number;
-  exceeded: boolean;
-  adjustedExceeded: boolean;
-  elapsedDays: number;
-  elapsedRatio: number;
-  shouldHaveSpent: number;
-  paceDifference: number;
-  paceStatus: "controlled" | "attention" | "off_track" | "future";
-  shortLabel: string;
-  shortStatus: string;
-  actionHint: string;
-  recoveryHint: string;
-};
-
 
 type AlertStateStatus = "resolved" | "later" | "ignored";
 
