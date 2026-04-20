@@ -493,6 +493,30 @@ type SimulationHistoryItem = {
   createdAt: string;
 };
 
+type CategoryOutOfPaceItem = {
+  category: string;
+  goal: number;
+  plannedCut: number;
+  adjustedGoal: number;
+  spent: number;
+  remaining: number;
+  adjustedRemaining: number;
+  percentage: number;
+  adjustedPercentage: number;
+  exceeded: boolean;
+  adjustedExceeded: boolean;
+  elapsedDays: number;
+  elapsedRatio: number;
+  shouldHaveSpent: number;
+  paceDifference: number;
+  paceStatus: "controlled" | "attention" | "off_track" | "future";
+  shortLabel: string;
+  shortStatus: string;
+  actionHint: string;
+  recoveryHint: string;
+};
+
+
 type AlertStateStatus = "resolved" | "later" | "ignored";
 
 type AlertStateItem = {
@@ -4030,7 +4054,7 @@ const dataHealthSummary = useMemo(() => {
     spendingCapacitySummary.extraSafeSpend,
   ]);
 
-  const topCategoriesOutOfPace = useMemo(() => {
+  const topCategoriesOutOfPace = useMemo<CategoryOutOfPaceItem[]>(() => {
     return goalPaceSummary
       .filter((item) => item.goal > 0)
       .filter(
@@ -4107,7 +4131,8 @@ const dataHealthSummary = useMemo(() => {
     const hasTransactionsToday = todayTransactions.length > 0;
     const hasNoBalance = currentAccountsBalance <= 0;
     const hasOpenInvoice = openInvoicesTotal > 0;
-    const mainCategory = topCategoriesOutOfPace[0] || null;
+    const mainCategory: CategoryOutOfPaceItem | null =
+      topCategoriesOutOfPace.length > 0 ? topCategoriesOutOfPace[0] : null;
 
     const focusLabel =
       isCurrentSelectedMonth && (monthClaritySummary.tone === "danger" || monthClaritySummary.tone === "warning")
