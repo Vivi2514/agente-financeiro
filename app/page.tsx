@@ -152,7 +152,6 @@ type CategoryOutOfPaceItem = {
   recoveryHint: string;
 };
 
-
 type SmartAlert = {
   id: string;
   title: string;
@@ -4066,7 +4065,7 @@ const dataHealthSummary = useMemo(() => {
           Math.abs(Number(a.paceDifference || 0))
       )
       .slice(0, 3)
-      .map((item) => {
+      .map((item): CategoryOutOfPaceItem => {
         const paceDifference = Math.abs(Number(item.paceDifference || 0));
         const adjustedPercentage = Number(item.adjustedPercentage || 0);
 
@@ -4082,7 +4081,7 @@ const dataHealthSummary = useMemo(() => {
             spendingCapacitySummary.daysRemaining,
             spendingCapacitySummary.isCurrentSelectedMonth
           ),
-        } as CategoryOutOfPaceItem;
+        };
       });
   }, [
     goalPaceSummary,
