@@ -129,7 +129,6 @@ type FutureInstallmentMonthGroup = {
   projectedBalance: number;
 };
 
-
 type CategoryOutOfPaceItem = {
   category: string;
   goal: number;
@@ -4083,7 +4082,7 @@ const dataHealthSummary = useMemo(() => {
             spendingCapacitySummary.daysRemaining,
             spendingCapacitySummary.isCurrentSelectedMonth
           ),
-        };
+        } as CategoryOutOfPaceItem;
       });
   }, [
     goalPaceSummary,
@@ -4091,7 +4090,7 @@ const dataHealthSummary = useMemo(() => {
     spendingCapacitySummary.isCurrentSelectedMonth,
   ]);
 
-  const supportingCategoriesOutOfPace = useMemo(() => {
+  const supportingCategoriesOutOfPace = useMemo<CategoryOutOfPaceItem[]>(() => {
     return topCategoriesOutOfPace.slice(1, 3);
   }, [topCategoriesOutOfPace]);
 
@@ -4132,8 +4131,7 @@ const dataHealthSummary = useMemo(() => {
     const hasTransactionsToday = todayTransactions.length > 0;
     const hasNoBalance = currentAccountsBalance <= 0;
     const hasOpenInvoice = openInvoicesTotal > 0;
-    const mainCategory: CategoryOutOfPaceItem | null =
-      topCategoriesOutOfPace.length > 0 ? topCategoriesOutOfPace[0] : null;
+    const mainCategory: CategoryOutOfPaceItem | null = topCategoriesOutOfPace.length > 0 ? topCategoriesOutOfPace[0] : null;
 
     const focusLabel =
       isCurrentSelectedMonth && (monthClaritySummary.tone === "danger" || monthClaritySummary.tone === "warning")
