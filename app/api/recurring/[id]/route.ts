@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { TransactionType } from "@prisma/client";
+import { requireCurrentUser } from "@/lib/current-user";
 
-function getIdFromRequest(req: Request) {
-  const { pathname } = new URL(req.url);
-  const parts = pathname.split("/").filter(Boolean);
-  return parts[parts.length - 1] || "";
-}
+type RouteContext = {
+  params: Promise<{
+    id: string;
+  }>;
+};
 
 function normalizeTransactionType(value?: string): TransactionType | null {
   if (!value) return null;
@@ -43,19 +44,23 @@ function normalizeBoolean(value: unknown) {
   return false;
 }
 
-export async function PATCH(req: Request) {
+export async function PATCH(req: Request, context: RouteContext) {
   try {
-    const id = getIdFromRequest(req);
+    const user = await requireCurrentUser();
+    const { id } = await context.params;
 
-    if (!id || id === "recurring") {
+    if (!id) {
       return NextResponse.json(
         { error: "ID da recorrência não informado." },
         { status: 400 }
       );
     }
 
-    const existing = await prisma.recurringTransaction.findUnique({
-      where: { id },
+    const existing = await prisma.recurringTransaction.findFirst({
+      where: {
+        id,
+        userId: user.id,
+      },
       include: {
         account: true,
         card: true,
@@ -81,6 +86,7 @@ export async function PATCH(req: Request) {
         const duplicateActive = await prisma.recurringTransaction.findFirst({
           where: {
             id: { not: id },
+            userId: user.id,
             title: existing.title,
             amount: existing.amount,
             type: existing.type,
@@ -90,7 +96,7 @@ export async function PATCH(req: Request) {
             cardId: existing.cardId,
             dayOfMonth: existing.dayOfMonth,
             active: true,
-            isFixed: existing.isFixed, // 👈 IMPORTANTE
+            isFixed: existing.isFixed,
           },
         });
 
@@ -106,7 +112,7 @@ export async function PATCH(req: Request) {
       }
 
       const updated = await prisma.recurringTransaction.update({
-        where: { id },
+        where: { id: existing.id },
         data: { active: nextActive },
         include: {
           account: true,
@@ -183,6 +189,40 @@ export async function PATCH(req: Request) {
       );
     }
 
+    if (accountId) {
+      const account = await prisma.accounts.findFirst({
+        where: {
+          id: accountId,
+          userId: user.id,
+        },
+        select: { id: true },
+      });
+
+      if (!account) {
+        return NextResponse.json(
+          { error: "Conta não encontrada ou sem permissão." },
+          { status: 404 }
+        );
+      }
+    }
+
+    if (cardId) {
+      const card = await prisma.cards.findFirst({
+        where: {
+          id: cardId,
+          userId: user.id,
+        },
+        select: { id: true },
+      });
+
+      if (!card) {
+        return NextResponse.json(
+          { error: "Cartão não encontrado ou sem permissão." },
+          { status: 404 }
+        );
+      }
+    }
+
     const normalizedTitle = String(title).trim();
     const normalizedAccountId =
       paymentMethod === "credit_card" || paymentMethod === "voucher"
@@ -196,6 +236,7 @@ export async function PATCH(req: Request) {
       const duplicateActive = await prisma.recurringTransaction.findFirst({
         where: {
           id: { not: id },
+          userId: user.id,
           title: normalizedTitle,
           amount: numericAmount,
           type: normalizedType,
@@ -205,7 +246,7 @@ export async function PATCH(req: Request) {
           cardId: normalizedCardId,
           dayOfMonth: parsedDayOfMonth,
           active: true,
-          isFixed: normalizedIsFixed, // 👈 IMPORTANTE
+          isFixed: normalizedIsFixed,
         },
       });
 
@@ -218,7 +259,7 @@ export async function PATCH(req: Request) {
     }
 
     const updated = await prisma.recurringTransaction.update({
-      where: { id },
+      where: { id: existing.id },
       data: {
         title: normalizedTitle,
         amount: numericAmount,
@@ -228,7 +269,7 @@ export async function PATCH(req: Request) {
         accountId: normalizedAccountId,
         cardId: normalizedCardId,
         dayOfMonth: parsedDayOfMonth,
-        isFixed: normalizedIsFixed, // 👈 SALVA AQUI
+        isFixed: normalizedIsFixed,
       },
       include: {
         account: true,
@@ -248,19 +289,23 @@ export async function PATCH(req: Request) {
   }
 }
 
-export async function DELETE(req: Request) {
+export async function DELETE(_req: Request, context: RouteContext) {
   try {
-    const id = getIdFromRequest(req);
+    const user = await requireCurrentUser();
+    const { id } = await context.params;
 
-    if (!id || id === "recurring") {
+    if (!id) {
       return NextResponse.json(
         { error: "ID da recorrência não informado." },
         { status: 400 }
       );
     }
 
-    const existing = await prisma.recurringTransaction.findUnique({
-      where: { id },
+    const existing = await prisma.recurringTransaction.findFirst({
+      where: {
+        id,
+        userId: user.id,
+      },
     });
 
     if (!existing) {
@@ -271,7 +316,7 @@ export async function DELETE(req: Request) {
     }
 
     await prisma.recurringTransaction.delete({
-      where: { id },
+      where: { id: existing.id },
     });
 
     return NextResponse.json({ success: true });

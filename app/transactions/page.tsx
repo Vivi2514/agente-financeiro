@@ -14,6 +14,7 @@ type PaymentMethod =
   | "voucher";
 
 type CreditMode = "avista" | "parcelado";
+type SpecialTransactionType = "normal" | "card_adjustment";
 
 type Account = {
   id: string;
@@ -42,6 +43,7 @@ type Transaction = {
   installmentNumber?: number | null;
   installmentTotal?: number | null;
   isFixed?: boolean | null;
+  isAdjustment?: boolean | null;
   date?: string;
   createdAt?: string;
   account?: {
@@ -215,6 +217,20 @@ function getFrequencyLabel(isFixed?: boolean | null) {
   return isFixed ? "Fixa" : "Variável";
 }
 
+function isAdjustmentTransaction(transaction?: Transaction | null) {
+  if (!transaction) return false;
+  if (transaction.isAdjustment) return true;
+
+  const normalizedTitle = (transaction.title || "").trim().toLowerCase();
+  return (
+    normalizedTitle === "saldo anterior" ||
+    normalizedTitle === "saldo inicial da fatura" ||
+    normalizedTitle === "ajuste inicial do cartao" ||
+    normalizedTitle === "ajuste inicial do cartão"
+  );
+}
+
+
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -236,6 +252,7 @@ export default function TransactionsPage() {
   const [installments, setInstallments] = useState("2");
   const [accountId, setAccountId] = useState("");
   const [cardId, setCardId] = useState("");
+  const [specialType, setSpecialType] = useState<SpecialTransactionType>("normal");
   const [isFixed, setIsFixed] = useState(false);
   const [createdAt, setCreatedAt] = useState(() => {
     const now = new Date();
@@ -305,6 +322,31 @@ export default function TransactionsPage() {
   }, []);
 
   useEffect(() => {
+    if (specialType !== "card_adjustment") return;
+
+    setType("expense");
+    setCategory("Outros");
+    setPaymentMethod("credit_card");
+    setCreditMode("avista");
+    setInstallments("2");
+    setAccountId("");
+    setIsFixed(false);
+
+    const normalizedTitle = title.trim().toLowerCase();
+    if (
+      !normalizedTitle ||
+      normalizedTitle === "saldo anterior" ||
+      normalizedTitle === "saldo inicial da fatura"
+    ) {
+      setTitle("Ajuste inicial do cartão");
+    }
+  }, [specialType, title]);
+
+  useEffect(() => {
+    if (specialType === "card_adjustment") {
+      return;
+    }
+
     if (type === "income") {
       setCardId("");
       setIsFixed(false);
@@ -338,9 +380,15 @@ export default function TransactionsPage() {
         setCategory("Alimentação");
       }
     }
-  }, [type, paymentMethod, category]);
+  }, [type, paymentMethod, category, specialType]);
 
   useEffect(() => {
+    if (specialType === "card_adjustment") {
+      setPaymentMethod("credit_card");
+      setAccountId("");
+      return;
+    }
+
     if (paymentMethod === "credit_card") {
       setAccountId("");
     } else {
@@ -352,12 +400,14 @@ export default function TransactionsPage() {
     if (paymentMethod === "voucher") {
       setAccountId("");
     }
-  }, [paymentMethod]);
+  }, [paymentMethod, specialType]);
 
   const totalIncome = useMemo(() => {
     return transactions
       .filter(
-        (transaction) => normalizeTransactionType(transaction.type) === "income"
+        (transaction) =>
+          normalizeTransactionType(transaction.type) === "income" &&
+          !isAdjustmentTransaction(transaction)
       )
       .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
   }, [transactions]);
@@ -365,7 +415,9 @@ export default function TransactionsPage() {
   const totalExpense = useMemo(() => {
     return transactions
       .filter(
-        (transaction) => normalizeTransactionType(transaction.type) === "expense"
+        (transaction) =>
+          normalizeTransactionType(transaction.type) === "expense" &&
+          !isAdjustmentTransaction(transaction)
       )
       .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
   }, [transactions]);
@@ -527,6 +579,7 @@ export default function TransactionsPage() {
     event.preventDefault();
 
     const amount = parseCurrencyToNumber(amountInput);
+    const isCardAdjustment = specialType === "card_adjustment";
 
     if (!title.trim()) {
       alert("Preencha o título da transação.");
@@ -538,17 +591,21 @@ export default function TransactionsPage() {
       return;
     }
 
-    if (!paymentMethod) {
+    if (!isCardAdjustment && !paymentMethod) {
       alert("Selecione uma forma de pagamento.");
       return;
     }
 
-    if (paymentMethod === "credit_card" && !cardId) {
+    if ((isCardAdjustment || paymentMethod === "credit_card") && !cardId) {
       alert("Selecione um cartão para pagamento no crédito.");
       return;
     }
 
-    if (paymentMethod === "credit_card" && creditMode === "parcelado") {
+    if (
+      !isCardAdjustment &&
+      paymentMethod === "credit_card" &&
+      creditMode === "parcelado"
+    ) {
       const parsedInstallments = Number(installments);
 
       if (
@@ -562,6 +619,7 @@ export default function TransactionsPage() {
     }
 
     if (
+      !isCardAdjustment &&
       paymentMethod !== "credit_card" &&
       paymentMethod !== "voucher" &&
       !accountId
@@ -576,20 +634,29 @@ export default function TransactionsPage() {
       const payload = {
         title: title.trim(),
         amount,
-        type,
-        category: category || "Outros",
-        paymentMethod,
-        creditMode: paymentMethod === "credit_card" ? creditMode : null,
+        type: isCardAdjustment ? "expense" : type,
+        category: isCardAdjustment ? null : category || "Outros",
+        paymentMethod: isCardAdjustment ? "credit_card" : paymentMethod,
+        creditMode:
+          !isCardAdjustment && paymentMethod === "credit_card" ? creditMode : null,
         installments:
-          paymentMethod === "credit_card" && creditMode === "parcelado"
+          !isCardAdjustment &&
+          paymentMethod === "credit_card" &&
+          creditMode === "parcelado"
             ? Number(installments)
             : 1,
         accountId:
-          paymentMethod === "credit_card" || paymentMethod === "voucher"
+          isCardAdjustment ||
+          paymentMethod === "credit_card" ||
+          paymentMethod === "voucher"
             ? null
             : accountId || null,
-        cardId: paymentMethod === "credit_card" ? cardId || null : null,
-        isFixed: type === "expense" ? isFixed : false,
+        cardId:
+          isCardAdjustment || paymentMethod === "credit_card"
+            ? cardId || null
+            : null,
+        isFixed: isCardAdjustment ? false : type === "expense" ? isFixed : false,
+        isAdjustment: isCardAdjustment,
         createdAt: createdAt
           ? new Date(`${createdAt}T12:00:00`).toISOString()
           : new Date().toISOString(),
@@ -617,6 +684,7 @@ export default function TransactionsPage() {
       setInstallments("2");
       setAccountId("");
       setCardId("");
+      setSpecialType("normal");
       setIsFixed(false);
 
       await loadData();
@@ -1089,13 +1157,36 @@ export default function TransactionsPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Natureza do lançamento
+                </label>
+                <select
+                  value={specialType}
+                  onChange={(e) =>
+                    setSpecialType(e.target.value as SpecialTransactionType)
+                  }
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                >
+                  <option value="normal">Transação normal</option>
+                  <option value="card_adjustment">Ajuste inicial do cartão</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Use ajuste inicial do cartão para registrar saldo já existente na fatura sem bagunçar suas categorias e metas.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
                   Título
                 </label>
                 <input
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Ex: Mercado, Salário, Aluguel"
+                  placeholder={
+                    specialType === "card_adjustment"
+                      ? "Ex: Ajuste inicial do cartão"
+                      : "Ex: Mercado, Salário, Aluguel"
+                  }
                   className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
                 />
               </div>
@@ -1122,11 +1213,12 @@ export default function TransactionsPage() {
                     Tipo
                   </label>
                   <select
-                    value={type}
+                    value={specialType === "card_adjustment" ? "expense" : type}
                     onChange={(e) =>
                       setType(e.target.value as "income" | "expense")
                     }
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    disabled={specialType === "card_adjustment"}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100"
                   >
                     <option value="expense">Saída</option>
                     <option value="income">Entrada</option>
@@ -1146,24 +1238,30 @@ export default function TransactionsPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Categoria
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
-                >
-                  {categoryOptions.map((cat) => (
-                    <option key={cat.value} value={cat.value}>
-                      {cat.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {specialType === "normal" ? (
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    Categoria
+                  </label>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                  >
+                    {categoryOptions.map((cat) => (
+                      <option key={cat.value} value={cat.value}>
+                        {cat.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Este lançamento será salvo como ajuste inicial do cartão e não entrará nas suas categorias e metas do mês.
+                </div>
+              )}
 
-              {type === "expense" && (
+              {specialType === "normal" && type === "expense" && (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
                     Tipo de lançamento
@@ -1182,31 +1280,37 @@ export default function TransactionsPage() {
                 </div>
               )}
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Forma de pagamento
-                </label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) =>
-                    setPaymentMethod(e.target.value as PaymentMethod)
-                  }
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
-                >
-                  <option value="">Selecione</option>
-                  {type === "expense" && (
-                    <option value="credit_card">💳 Cartão de crédito</option>
-                  )}
-                  <option value="pix">💸 Pix</option>
-                  <option value="debit_card">💳 Cartão de débito</option>
-                  <option value="cash">💵 Dinheiro</option>
-                  <option value="bank_transfer">🏦 Transferência</option>
-                  <option value="boleto">🧾 Boleto</option>
-                  <option value="voucher">🎫 Vale alimentação</option>
-                </select>
-              </div>
+              {specialType === "normal" ? (
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    Forma de pagamento
+                  </label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) =>
+                      setPaymentMethod(e.target.value as PaymentMethod)
+                    }
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                  >
+                    <option value="">Selecione</option>
+                    {type === "expense" && (
+                      <option value="credit_card">💳 Cartão de crédito</option>
+                    )}
+                    <option value="pix">💸 Pix</option>
+                    <option value="debit_card">💳 Cartão de débito</option>
+                    <option value="cash">💵 Dinheiro</option>
+                    <option value="bank_transfer">🏦 Transferência</option>
+                    <option value="boleto">🧾 Boleto</option>
+                    <option value="voucher">🎫 Vale alimentação</option>
+                  </select>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+                  O ajuste inicial sempre usa <strong>cartão de crédito</strong> e fica fora das categorias de gasto.
+                </div>
+              )}
 
-              {paymentMethod === "credit_card" && (
+              {specialType === "normal" && paymentMethod === "credit_card" && (
                 <>
                   <div>
                     <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -1242,7 +1346,7 @@ export default function TransactionsPage() {
                 </>
               )}
 
-              {paymentMethod === "credit_card" ? (
+              {specialType === "card_adjustment" || paymentMethod === "credit_card" ? (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
                     Cartão
@@ -1332,6 +1436,7 @@ export default function TransactionsPage() {
                   const normalizedType = normalizeTransactionType(transaction.type);
                   const isPaidInvoice = transaction.invoice?.status === "PAID";
                   const isInstallment = Boolean(transaction.purchaseGroupId);
+                  const isAdjustment = isAdjustmentTransaction(transaction);
                   const isEditing = editingId === transaction.id;
                   const editCategoryOptions =
                     editForm?.type === "income"
@@ -1634,7 +1739,11 @@ export default function TransactionsPage() {
                                 {normalizedType === "income" ? "Entrada" : "Saída"}
                               </span>
 
-                              {normalizedType === "expense" && (
+                              {isAdjustment ? (
+                                <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                                  Ajuste
+                                </span>
+                              ) : normalizedType === "expense" ? (
                                 <span
                                   className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                                     transaction.isFixed
@@ -1644,7 +1753,7 @@ export default function TransactionsPage() {
                                 >
                                   {getFrequencyLabel(transaction.isFixed)}
                                 </span>
-                              )}
+                              ) : null}
 
                               {isPaidInvoice && (
                                 <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
@@ -1661,9 +1770,12 @@ export default function TransactionsPage() {
 
                             <div className="mt-2 flex flex-col gap-1 text-sm text-slate-500">
                               <p>
-                                Categoria: {getCategoryLabel(transaction.category)}
+                                Categoria:{" "}
+                                {isAdjustment
+                                  ? "Ajuste inicial do cartão"
+                                  : getCategoryLabel(transaction.category)}
                               </p>
-                              {normalizedType === "expense" && (
+                              {normalizedType === "expense" && !isAdjustment && (
                                 <p>
                                   Tipo de lançamento: {getFrequencyLabel(transaction.isFixed)}
                                 </p>

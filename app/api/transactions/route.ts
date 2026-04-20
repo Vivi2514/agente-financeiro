@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomUUID } from "crypto";
-import { TransactionType } from "@prisma/client";
+import { InvoiceStatus, Prisma, TransactionType } from "@prisma/client";
 import { requireCurrentUser } from "@/lib/current-user";
 
 function safeParseDate(value?: string) {
@@ -53,6 +53,12 @@ function normalizeBoolean(value: unknown) {
   return false;
 }
 
+function normalizeOptionalString(value?: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 function shouldAffectAccountBalance(params: {
   accountId?: string | null;
   paymentMethod?: string | null;
@@ -64,14 +70,17 @@ function shouldAffectAccountBalance(params: {
   return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
 }
 
-async function applyAccountBalanceChange(params: {
-  accountId: string;
-  type: TransactionType;
-  amount: number;
-}) {
+async function applyAccountBalanceChange(
+  tx: Prisma.TransactionClient,
+  params: {
+    accountId: string;
+    type: TransactionType;
+    amount: number;
+  }
+) {
   const { accountId, type, amount } = params;
 
-  await prisma.accounts.update({
+  await tx.accounts.update({
     where: { id: accountId },
     data: {
       balance: {
@@ -79,6 +88,146 @@ async function applyAccountBalanceChange(params: {
       },
     },
   });
+}
+
+async function recalculateInvoiceTotal(
+  tx: Prisma.TransactionClient,
+  invoiceId: string,
+  userId: string
+) {
+  const transactions = await tx.transaction.findMany({
+    where: {
+      invoiceId,
+      userId,
+    },
+    select: { amount: true },
+  });
+
+  const total = transactions.reduce(
+    (sum, transaction) => sum + Number(transaction.amount || 0),
+    0
+  );
+
+  if (transactions.length === 0) {
+    await tx.invoice.deleteMany({
+      where: {
+        id: invoiceId,
+        userId,
+        status: InvoiceStatus.OPEN,
+      },
+    });
+    return;
+  }
+
+  await tx.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      total,
+    },
+  });
+}
+
+async function getOrCreateOpenInvoice(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    cardId: string;
+    month: number;
+    year: number;
+  }
+) {
+  const { userId, cardId, month, year } = params;
+
+  const existing = await tx.invoice.findFirst({
+    where: {
+      userId,
+      cardId,
+      month,
+      year,
+    },
+  });
+
+  if (existing) {
+    if (existing.status === InvoiceStatus.PAID) {
+      throw new Error(
+        "Não é possível lançar compra em uma fatura já paga para este mês."
+      );
+    }
+
+    return existing;
+  }
+
+  return tx.invoice.create({
+    data: {
+      cardId,
+      month,
+      year,
+      total: 0,
+      status: InvoiceStatus.OPEN,
+      userId,
+    },
+  });
+}
+
+async function validateCardLimit(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    cardId: string;
+    purchaseAmount: number;
+  }
+) {
+  const { userId, cardId, purchaseAmount } = params;
+
+  const card = await tx.cards.findFirst({
+    where: {
+      id: cardId,
+      userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      limit: true,
+      invoices: {
+        where: {
+          userId,
+          status: InvoiceStatus.OPEN,
+        },
+        select: {
+          total: true,
+        },
+      },
+    },
+  });
+
+  if (!card) {
+    throw new Error("Cartão não encontrado ou sem permissão.");
+  }
+
+  const limitValue = Number(card.limit ?? 0);
+
+  if (limitValue <= 0) {
+    return;
+  }
+
+  const openInvoiceTotal = card.invoices.reduce(
+    (sum, invoice) => sum + Number(invoice.total ?? 0),
+    0
+  );
+
+  const availableLimit = limitValue - openInvoiceTotal;
+
+  if (purchaseAmount > availableLimit) {
+    throw new Error(
+      `Limite insuficiente no cartão ${card.name}. Disponível: ${availableLimit.toLocaleString(
+        "pt-BR",
+        {
+          style: "currency",
+          currency: "BRL",
+        }
+      )}.`
+    );
+  }
 }
 
 export async function GET() {
@@ -94,9 +243,10 @@ export async function GET() {
         card: true,
         invoice: true,
       },
-      orderBy: {
-        date: "desc",
-      },
+      orderBy: [
+        { date: "desc" },
+        { createdAt: "desc" },
+      ],
     });
 
     return NextResponse.json(
@@ -132,6 +282,7 @@ export async function POST(req: Request) {
       cardId,
       installments,
       isFixed,
+      isAdjustment,
     } = body;
 
     if (!title || amount === undefined || !type) {
@@ -153,6 +304,12 @@ export async function POST(req: Request) {
     const parsedDate = safeParseDate(date || createdAt);
     const numericAmount = Number(amount);
     const normalizedIsFixed = normalizeBoolean(isFixed);
+    const normalizedIsAdjustment = normalizeBoolean(isAdjustment);
+    const normalizedTitle = String(title).trim();
+    const normalizedCategory = normalizeOptionalString(category);
+    const normalizedPaymentMethod = normalizeOptionalString(paymentMethod);
+    const normalizedAccountId = normalizeOptionalString(accountId);
+    const normalizedCardId = normalizeOptionalString(cardId);
 
     if (Number.isNaN(numericAmount) || numericAmount <= 0) {
       return NextResponse.json(
@@ -162,8 +319,15 @@ export async function POST(req: Request) {
     }
 
     const isExpense = normalizedType === TransactionType.EXPENSE;
-    const isCreditCardPayment = paymentMethod === "credit_card";
+    const isCreditCardPayment = normalizedPaymentMethod === "credit_card";
     const totalInstallments = Number(installments || 1);
+
+    if (!Number.isInteger(totalInstallments) || totalInstallments < 1 || totalInstallments > 24) {
+      return NextResponse.json(
+        { error: "O número de parcelas deve estar entre 1 e 24." },
+        { status: 400 }
+      );
+    }
 
     const isInstallmentPurchase =
       isCreditCardPayment &&
@@ -171,7 +335,7 @@ export async function POST(req: Request) {
       totalInstallments > 1 &&
       isExpense;
 
-    if (isCreditCardPayment && !cardId) {
+    if (isCreditCardPayment && !normalizedCardId) {
       return NextResponse.json(
         { error: "Selecione um cartão para compras no crédito." },
         { status: 400 }
@@ -180,8 +344,8 @@ export async function POST(req: Request) {
 
     if (
       !isCreditCardPayment &&
-      paymentMethod !== "voucher" &&
-      (!accountId || accountId === "")
+      normalizedPaymentMethod !== "voucher" &&
+      !normalizedAccountId
     ) {
       return NextResponse.json(
         { error: "Selecione uma conta." },
@@ -189,228 +353,201 @@ export async function POST(req: Request) {
       );
     }
 
-    if (accountId) {
-      const account = await prisma.accounts.findFirst({
-        where: {
-          id: accountId,
-          userId: user.id,
-        },
-        select: { id: true },
-      });
-
-      if (!account) {
-        return NextResponse.json(
-          { error: "Conta não encontrada ou sem permissão." },
-          { status: 404 }
-        );
-      }
-    }
-
-    if (cardId) {
-      const card = await prisma.cards.findFirst({
-        where: {
-          id: cardId,
-          userId: user.id,
-        },
-        select: { id: true },
-      });
-
-      if (!card) {
-        return NextResponse.json(
-          { error: "Cartão não encontrado ou sem permissão." },
-          { status: 404 }
-        );
-      }
-    }
-
-    if (isInstallmentPurchase) {
-      const purchaseGroupId = randomUUID();
-      const baseInstallmentAmount = Number(
-        (numericAmount / totalInstallments).toFixed(2)
-      );
-
-      const createdTransactions = [];
-
-      for (let i = 1; i <= totalInstallments; i++) {
-        const installmentDate = new Date(parsedDate);
-        installmentDate.setMonth(parsedDate.getMonth() + (i - 1));
-
-        const month = installmentDate.getMonth() + 1;
-        const year = installmentDate.getFullYear();
-
-        let invoice = await prisma.invoice.findFirst({
+    const result = await prisma.$transaction(async (tx) => {
+      if (normalizedAccountId) {
+        const account = await tx.accounts.findFirst({
           where: {
-            cardId,
-            month,
-            year,
+            id: normalizedAccountId,
             userId: user.id,
           },
+          select: { id: true },
         });
 
-        if (!invoice) {
-          invoice = await prisma.invoice.create({
+        if (!account) {
+          throw new Error("Conta não encontrada ou sem permissão.");
+        }
+      }
+
+      if (normalizedCardId) {
+        const card = await tx.cards.findFirst({
+          where: {
+            id: normalizedCardId,
+            userId: user.id,
+          },
+          select: { id: true },
+        });
+
+        if (!card) {
+          throw new Error("Cartão não encontrado ou sem permissão.");
+        }
+      }
+
+      if (isCreditCardPayment && normalizedCardId && isExpense && !normalizedIsAdjustment) {
+        await validateCardLimit(tx, {
+          userId: user.id,
+          cardId: normalizedCardId,
+          purchaseAmount: numericAmount,
+        });
+      }
+
+      if (isInstallmentPurchase && normalizedCardId) {
+        const purchaseGroupId = randomUUID();
+        const baseInstallmentAmount = Number(
+          (numericAmount / totalInstallments).toFixed(2)
+        );
+
+        const createdTransactions = [];
+        const affectedInvoiceIds = new Set<string>();
+
+        for (let i = 1; i <= totalInstallments; i++) {
+          const installmentDate = new Date(parsedDate);
+          installmentDate.setMonth(parsedDate.getMonth() + (i - 1));
+
+          const month = installmentDate.getMonth() + 1;
+          const year = installmentDate.getFullYear();
+
+          const invoice = await getOrCreateOpenInvoice(tx, {
+            userId: user.id,
+            cardId: normalizedCardId,
+            month,
+            year,
+          });
+
+          const installmentAmount =
+            i < totalInstallments
+              ? baseInstallmentAmount
+              : Number(
+                  (
+                    numericAmount -
+                    baseInstallmentAmount * (totalInstallments - 1)
+                  ).toFixed(2)
+                );
+
+          const transaction = await tx.transaction.create({
             data: {
-              cardId,
-              month,
-              year,
-              total: 0,
-              status: "OPEN",
+              title: `${normalizedTitle} (${i}/${totalInstallments})`,
+              amount: installmentAmount,
+              type: normalizedType,
+              category: normalizedCategory,
+              paymentMethod: normalizedPaymentMethod,
+              isFixed: normalizedIsFixed,
+              isAdjustment: normalizedIsAdjustment,
+              date: installmentDate,
+              accountId: null,
+              cardId: normalizedCardId,
+              invoiceId: invoice.id,
+              installmentNumber: i,
+              installmentTotal: totalInstallments,
+              purchaseGroupId,
               userId: user.id,
             },
+            include: {
+              account: true,
+              card: true,
+              invoice: true,
+            },
+          });
+
+          affectedInvoiceIds.add(invoice.id);
+
+          createdTransactions.push({
+            ...transaction,
+            amount: Number(transaction.amount),
           });
         }
 
-        const installmentAmount =
-          i < totalInstallments
-            ? baseInstallmentAmount
-            : Number(
-                (
-                  numericAmount -
-                  baseInstallmentAmount * (totalInstallments - 1)
-                ).toFixed(2)
-              );
+        for (const invoiceId of affectedInvoiceIds) {
+          await recalculateInvoiceTotal(tx, invoiceId, user.id);
+        }
 
-        const transaction = await prisma.transaction.create({
-          data: {
-            title: `${String(title).trim()} (${i}/${totalInstallments})`,
-            amount: installmentAmount,
-            type: normalizedType,
-            category: category || null,
-            paymentMethod,
-            isFixed: normalizedIsFixed,
-            date: installmentDate,
-            accountId: null,
-            cardId,
-            invoiceId: invoice.id,
-            installmentNumber: i,
-            installmentTotal: totalInstallments,
-            purchaseGroupId,
-            userId: user.id,
-          },
-          include: {
-            account: true,
-            card: true,
-            invoice: true,
-          },
-        });
-
-        await prisma.invoice.update({
-          where: { id: invoice.id },
-          data: {
-            total: {
-              increment: installmentAmount,
-            },
-          },
-        });
-
-        createdTransactions.push({
-          ...transaction,
-          amount: Number(transaction.amount),
-        });
+        return {
+          success: true,
+          transactions: createdTransactions,
+        };
       }
 
-      return NextResponse.json(
-        { success: true, transactions: createdTransactions },
-        { status: 201 }
-      );
-    }
+      let invoiceId: string | null = null;
 
-    let invoiceId: string | null = null;
+      if (isCreditCardPayment && isExpense && normalizedCardId) {
+        const month = parsedDate.getMonth() + 1;
+        const year = parsedDate.getFullYear();
 
-    if (isCreditCardPayment && isExpense) {
-      const month = parsedDate.getMonth() + 1;
-      const year = parsedDate.getFullYear();
-
-      let invoice = await prisma.invoice.findFirst({
-        where: {
-          cardId,
+        const invoice = await getOrCreateOpenInvoice(tx, {
+          userId: user.id,
+          cardId: normalizedCardId,
           month,
           year,
+        });
+
+        invoiceId = invoice.id;
+      }
+
+      const nextAccountId =
+        isCreditCardPayment || normalizedPaymentMethod === "voucher"
+          ? null
+          : normalizedAccountId;
+
+      const transaction = await tx.transaction.create({
+        data: {
+          title: normalizedTitle,
+          amount: numericAmount,
+          type: normalizedType,
+          category: normalizedCategory,
+          paymentMethod: normalizedPaymentMethod,
+          isFixed: normalizedIsFixed,
+          isAdjustment: normalizedIsAdjustment,
+          date: parsedDate,
+          accountId: nextAccountId,
+          cardId: isCreditCardPayment ? normalizedCardId : null,
+          invoiceId,
+          installmentNumber: null,
+          installmentTotal: null,
+          purchaseGroupId: null,
           userId: user.id,
+        },
+        include: {
+          account: true,
+          card: true,
+          invoice: true,
         },
       });
 
-      if (!invoice) {
-        invoice = await prisma.invoice.create({
-          data: {
-            cardId,
-            month,
-            year,
-            total: 0,
-            status: "OPEN",
-            userId: user.id,
-          },
+      if (invoiceId) {
+        await recalculateInvoiceTotal(tx, invoiceId, user.id);
+      }
+
+      if (
+        shouldAffectAccountBalance({
+          accountId: nextAccountId,
+          paymentMethod: normalizedPaymentMethod,
+        }) &&
+        nextAccountId
+      ) {
+        await applyAccountBalanceChange(tx, {
+          accountId: nextAccountId,
+          type: normalizedType,
+          amount: numericAmount,
         });
       }
 
-      invoiceId = invoice.id;
-    }
-
-    const nextAccountId =
-      isCreditCardPayment || paymentMethod === "voucher"
-        ? null
-        : accountId || null;
-
-    const transaction = await prisma.transaction.create({
-      data: {
-        title: String(title).trim(),
-        amount: numericAmount,
-        type: normalizedType,
-        category: category || null,
-        paymentMethod: paymentMethod || null,
-        isFixed: normalizedIsFixed,
-        date: parsedDate,
-        accountId: nextAccountId,
-        cardId: isCreditCardPayment ? cardId || null : null,
-        invoiceId,
-        installmentNumber: null,
-        installmentTotal: null,
-        purchaseGroupId: null,
-        userId: user.id,
-      },
-      include: {
-        account: true,
-        card: true,
-        invoice: true,
-      },
-    });
-
-    if (invoiceId && isExpense) {
-      await prisma.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          total: {
-            increment: numericAmount,
-          },
-        },
-      });
-    }
-
-    if (
-      shouldAffectAccountBalance({
-        accountId: nextAccountId,
-        paymentMethod: paymentMethod || null,
-      }) &&
-      nextAccountId
-    ) {
-      await applyAccountBalanceChange({
-        accountId: nextAccountId,
-        type: normalizedType,
-        amount: numericAmount,
-      });
-    }
-
-    return NextResponse.json(
-      {
+      return {
         ...transaction,
         amount: Number(transaction.amount),
-      },
+      };
+    });
+
+    return NextResponse.json(
+      result,
       { status: 201 }
     );
   } catch (error) {
     console.error("Erro ao criar transação:", error);
+
+    const message =
+      error instanceof Error ? error.message : "Erro ao criar transação";
+
     return NextResponse.json(
-      { error: "Erro ao criar transação", details: String(error) },
+      { error: message, details: String(error) },
       { status: 500 }
     );
   }

@@ -1,0 +1,1318 @@
+
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+
+type Transaction = {
+  id: string;
+  title: string;
+  amount: number;
+  type: string;
+  category?: string | null;
+  paymentMethod?: string | null;
+  accountId?: string | null;
+  cardId?: string | null;
+  invoiceId?: string | null;
+  installmentNumber?: number | null;
+  installmentTotal?: number | null;
+  purchaseGroupId?: string | null;
+  isFixed?: boolean | null;
+  isAdjustment?: boolean | null;
+  date: string;
+};
+
+type PaymentMethod =
+  | ""
+  | "cash"
+  | "debit_card"
+  | "credit_card"
+  | "pix"
+  | "bank_transfer"
+  | "boleto"
+  | "voucher";
+
+type Account = {
+  id: string;
+  name: string;
+  bank?: string | null;
+  balance: number;
+};
+
+type Card = {
+  id: string;
+  name: string;
+  limit?: number;
+  brand?: string | null;
+};
+
+type RecurringTransaction = {
+  id: string;
+  title: string;
+  amount: number;
+  type: string;
+  category?: string | null;
+  paymentMethod?: PaymentMethod | string | null;
+  accountId?: string | null;
+  cardId?: string | null;
+  isFixed?: boolean | null;
+  dayOfMonth: number;
+  active: boolean;
+};
+
+type Invoice = {
+  id: string;
+  cardId: string;
+  month: number;
+  year: number;
+  total: number;
+  status: "OPEN" | "PAID";
+  paidAt?: string | null;
+  paidFromAccountId?: string | null;
+  card?: {
+    id: string;
+    name: string;
+    brand?: string | null;
+  } | null;
+};
+
+type SmartAlert = {
+  id: string;
+  title: string;
+  message: string;
+  tone: "danger" | "warning" | "info" | "success";
+};
+
+type ForecastMonth = {
+  key: string;
+  label: string;
+  projectedBalance: number;
+  recurringIncome: number;
+  recurringExpense: number;
+  installmentImpact: number;
+  isCritical: boolean;
+};
+
+function formatCurrency(value?: number | null) {
+  return Number(value ?? 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+
+function getMonthInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function parseMonthInput(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  return { year, month };
+}
+
+function formatMonthYear(date: Date) {
+  return date.toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function normalizeComparableText(value?: string | null) {
+  return (value || "").trim().toLowerCase();
+}
+
+function isExpenseType(type?: string | null) {
+  if (!type) return false;
+  const normalized = type.toLowerCase();
+  return (
+    normalized === "expense" ||
+    normalized === "saida" ||
+    normalized === "saída"
+  );
+}
+
+function isIncomeType(type?: string | null) {
+  if (!type) return false;
+  const normalized = type.toLowerCase();
+  return normalized === "income" || normalized === "entrada";
+}
+
+function extractInstallmentInfo(title?: string | null) {
+  if (!title) return null;
+
+  const match = title.trim().match(/\((\d+)\s*\/\s*(\d+)\)$/);
+  if (!match) return null;
+
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+
+  if (Number.isNaN(current) || Number.isNaN(total)) return null;
+
+  return { current, total };
+}
+
+function isInstallmentTransaction(transaction: Transaction) {
+  if (Number(transaction.installmentTotal || 0) > 1) return true;
+
+  const parsed = extractInstallmentInfo(transaction.title);
+  return !!parsed && parsed.total > 1;
+}
+
+function isAdjustmentTransaction(transaction?: Transaction | null) {
+  if (!transaction) return false;
+  if (transaction.isAdjustment) return true;
+
+  const normalizedTitle = normalizeComparableText(transaction.title);
+  return (
+    normalizedTitle === "saldo anterior" ||
+    normalizedTitle === "saldo inicial da fatura" ||
+    normalizedTitle === "ajuste inicial do cartao" ||
+    normalizedTitle === "ajuste inicial do cartão"
+  );
+}
+
+function getAlertStyles(tone: SmartAlert["tone"]) {
+  switch (tone) {
+    case "danger":
+      return {
+        container: "border-rose-200 bg-rose-50",
+        title: "text-rose-900",
+        text: "text-rose-800",
+        badge: "bg-rose-100 text-rose-700",
+        label: "Atenção alta",
+      };
+    case "warning":
+      return {
+        container: "border-amber-200 bg-amber-50",
+        title: "text-amber-900",
+        text: "text-amber-800",
+        badge: "bg-amber-100 text-amber-700",
+        label: "Atenção",
+      };
+    case "success":
+      return {
+        container: "border-emerald-200 bg-emerald-50",
+        title: "text-emerald-900",
+        text: "text-emerald-800",
+        badge: "bg-emerald-100 text-emerald-700",
+        label: "Tudo bem",
+      };
+    default:
+      return {
+        container: "border-sky-200 bg-sky-50",
+        title: "text-sky-900",
+        text: "text-sky-800",
+        badge: "bg-sky-100 text-sky-700",
+        label: "Insight",
+      };
+  }
+}
+
+export default function IntelligencePage() {
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [recurrings, setRecurrings] = useState<RecurringTransaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedMonth, setSelectedMonth] = useState(
+    getMonthInputValue(new Date())
+  );
+
+  async function loadData() {
+    try {
+      setLoading(true);
+
+      const [
+        transactionsResult,
+        accountsResult,
+        cardsResult,
+        invoicesResult,
+        recurringsResult,
+      ] = await Promise.allSettled([
+        fetch("/api/transactions", { cache: "no-store" }),
+        fetch("/api/accounts", { cache: "no-store" }),
+        fetch("/api/cards", { cache: "no-store" }),
+        fetch("/api/invoices", { cache: "no-store" }),
+        fetch("/api/recurring", { cache: "no-store" }),
+      ]);
+
+      if (
+        transactionsResult.status === "fulfilled" &&
+        transactionsResult.value.ok
+      ) {
+        const data = await transactionsResult.value.json();
+        setTransactions(Array.isArray(data) ? data : []);
+      } else {
+        setTransactions([]);
+      }
+
+      if (accountsResult.status === "fulfilled" && accountsResult.value.ok) {
+        const data = await accountsResult.value.json();
+        setAccounts(Array.isArray(data) ? data : []);
+      } else {
+        setAccounts([]);
+      }
+
+      if (cardsResult.status === "fulfilled" && cardsResult.value.ok) {
+        const data = await cardsResult.value.json();
+        setCards(Array.isArray(data) ? data : []);
+      } else {
+        setCards([]);
+      }
+
+      if (invoicesResult.status === "fulfilled" && invoicesResult.value.ok) {
+        const data = await invoicesResult.value.json();
+        setInvoices(Array.isArray(data) ? data : []);
+      } else {
+        setInvoices([]);
+      }
+
+      if (recurringsResult.status === "fulfilled" && recurringsResult.value.ok) {
+        const data = await recurringsResult.value.json();
+        setRecurrings(Array.isArray(data) ? data : []);
+      } else {
+        setRecurrings([]);
+      }
+    } catch (error) {
+      console.error("Erro ao carregar inteligência financeira:", error);
+      setTransactions([]);
+      setAccounts([]);
+      setCards([]);
+      setInvoices([]);
+      setRecurrings([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const selectedMonthMeta = useMemo(() => {
+    const { year, month } = parseMonthInput(selectedMonth);
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    return {
+      year,
+      month,
+      daysInMonth,
+    };
+  }, [selectedMonth]);
+
+  const filteredTransactions = useMemo(() => {
+    const { year, month } = parseMonthInput(selectedMonth);
+
+    return transactions.filter((transaction) => {
+      const transactionDate = new Date(transaction.date);
+
+      return (
+        transactionDate.getFullYear() === year &&
+        transactionDate.getMonth() + 1 === month
+      );
+    });
+  }, [transactions, selectedMonth]);
+
+  const analyticalTransactions = useMemo(() => {
+    return filteredTransactions.filter(
+      (transaction) => !isAdjustmentTransaction(transaction)
+    );
+  }, [filteredTransactions]);
+
+  const filteredExpenses = useMemo(() => {
+    return analyticalTransactions.filter((transaction) =>
+      isExpenseType(transaction.type)
+    );
+  }, [analyticalTransactions]);
+
+  const filteredIncomes = useMemo(() => {
+    return analyticalTransactions.filter((transaction) =>
+      isIncomeType(transaction.type)
+    );
+  }, [analyticalTransactions]);
+
+  const currentAccountsBalance = useMemo(() => {
+    return accounts.reduce(
+      (sum, account) => sum + Number(account.balance || 0),
+      0
+    );
+  }, [accounts]);
+
+  const totalExpenses = useMemo(() => {
+    return filteredExpenses.reduce(
+      (sum, transaction) => sum + Number(transaction.amount || 0),
+      0
+    );
+  }, [filteredExpenses]);
+
+  const totalIncomes = useMemo(() => {
+    return filteredIncomes.reduce(
+      (sum, transaction) => sum + Number(transaction.amount || 0),
+      0
+    );
+  }, [filteredIncomes]);
+
+  const openInvoices = useMemo(() => {
+    return [...invoices]
+      .filter((invoice) => invoice.status === "OPEN")
+      .sort((a, b) => {
+        const aDate = new Date(a.year, a.month - 1, 1).getTime();
+        const bDate = new Date(b.year, b.month - 1, 1).getTime();
+        return aDate - bDate;
+      });
+  }, [invoices]);
+
+  const openInvoicesTotal = useMemo(() => {
+    return openInvoices.reduce(
+      (sum, invoice) => sum + Number(invoice.total || 0),
+      0
+    );
+  }, [openInvoices]);
+
+  const selectedMonthOpenInvoices = useMemo(() => {
+    return openInvoices.filter(
+      (invoice) =>
+        invoice.year === selectedMonthMeta.year &&
+        invoice.month === selectedMonthMeta.month
+    );
+  }, [openInvoices, selectedMonthMeta.month, selectedMonthMeta.year]);
+
+  const selectedMonthOpenInvoicesTotal = useMemo(() => {
+    return selectedMonthOpenInvoices.reduce(
+      (sum, invoice) => sum + Number(invoice.total || 0),
+      0
+    );
+  }, [selectedMonthOpenInvoices]);
+
+  const monthlyRecurringProjection = useMemo(() => {
+    const sameRecurringAlreadyGenerated = (
+      recurring: RecurringTransaction,
+      transaction: Transaction
+    ) => {
+      const recurringDay = Math.min(
+        Math.max(Number(recurring.dayOfMonth || 1), 1),
+        selectedMonthMeta.daysInMonth
+      );
+      const transactionDate = new Date(transaction.date);
+      const recurringTitle = normalizeComparableText(recurring.title);
+      const transactionTitle = normalizeComparableText(transaction.title);
+      const sameTitle =
+        transactionTitle === recurringTitle ||
+        transactionTitle.startsWith(`${recurringTitle} (`);
+      const sameAmount =
+        Math.round(Number(transaction.amount || 0) * 100) ===
+        Math.round(Number(recurring.amount || 0) * 100);
+      const sameType =
+        (isIncomeType(transaction.type) && isIncomeType(recurring.type)) ||
+        (isExpenseType(transaction.type) && isExpenseType(recurring.type));
+      const sameCategory =
+        normalizeComparableText(transaction.category) ===
+        normalizeComparableText(recurring.category);
+      const samePaymentMethod =
+        normalizeComparableText(transaction.paymentMethod) ===
+        normalizeComparableText(recurring.paymentMethod);
+      const sameAccount = (transaction.accountId || "") === (recurring.accountId || "");
+      const sameCard = (transaction.cardId || "") === (recurring.cardId || "");
+      const sameDay = transactionDate.getDate() === recurringDay;
+
+      return (
+        sameTitle &&
+        sameAmount &&
+        sameType &&
+        sameCategory &&
+        samePaymentMethod &&
+        sameAccount &&
+        sameCard &&
+        sameDay
+      );
+    };
+
+    const activeRecurrings = recurrings.filter((item) => item.active);
+    const pendingIncomeItems: RecurringTransaction[] = [];
+    const pendingExpenseItems: RecurringTransaction[] = [];
+
+    activeRecurrings.forEach((item) => {
+      const alreadyGenerated = filteredTransactions.some((transaction) =>
+        sameRecurringAlreadyGenerated(item, transaction)
+      );
+
+      if (alreadyGenerated) return;
+
+      if (isIncomeType(item.type)) {
+        pendingIncomeItems.push(item);
+        return;
+      }
+
+      if (isExpenseType(item.type)) {
+        pendingExpenseItems.push(item);
+      }
+    });
+
+    const incomesTotal = pendingIncomeItems.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+    const expensesTotal = pendingExpenseItems.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+    return {
+      pendingIncomeItems,
+      pendingExpenseItems,
+      incomesTotal,
+      expensesTotal,
+    };
+  }, [filteredTransactions, recurrings, selectedMonthMeta.daysInMonth]);
+
+  const futureInstallments = useMemo(() => {
+    const { year, month } = parseMonthInput(selectedMonth);
+    const baseDate = new Date(year, month - 1, 1);
+
+    return [...transactions]
+      .filter((transaction) => {
+        const transactionDate = new Date(transaction.date);
+        const isInstallment = isInstallmentTransaction(transaction);
+        const isFuture = transactionDate.getTime() > baseDate.getTime();
+        const isExpense = isExpenseType(transaction.type);
+
+        return (
+          isInstallment &&
+          isFuture &&
+          isExpense &&
+          !isAdjustmentTransaction(transaction)
+        );
+      })
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }, [transactions, selectedMonth]);
+
+  const futureInstallmentsTotal = useMemo(() => {
+    return futureInstallments.reduce(
+      (sum, transaction) => sum + Number(transaction.amount || 0),
+      0
+    );
+  }, [futureInstallments]);
+
+  const projectedBalanceAfterInvoices = useMemo(() => {
+    return currentAccountsBalance - openInvoicesTotal;
+  }, [currentAccountsBalance, openInvoicesTotal]);
+
+  const projectedBalanceReal = useMemo(() => {
+    return currentAccountsBalance - openInvoicesTotal - futureInstallmentsTotal;
+  }, [currentAccountsBalance, openInvoicesTotal, futureInstallmentsTotal]);
+
+  const futureInstallmentsByMonth = useMemo(() => {
+    const grouped = futureInstallments.reduce<
+      Record<
+        string,
+        {
+          key: string;
+          label: string;
+          total: number;
+          count: number;
+          transactions: Transaction[];
+          projectedBalance: number;
+        }
+      >
+    >((acc, transaction) => {
+      const date = new Date(transaction.date);
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+      const label = date.toLocaleDateString("pt-BR", {
+        month: "long",
+        year: "numeric",
+      });
+
+      if (!acc[key]) {
+        acc[key] = {
+          key,
+          label,
+          total: 0,
+          count: 0,
+          transactions: [],
+          projectedBalance: 0,
+        };
+      }
+
+      acc[key].total += Number(transaction.amount || 0);
+      acc[key].count += 1;
+      acc[key].transactions.push(transaction);
+
+      return acc;
+    }, {});
+
+    const ordered = Object.values(grouped).sort((a, b) =>
+      a.key.localeCompare(b.key)
+    );
+
+    let runningBalance = projectedBalanceAfterInvoices;
+
+    return ordered.map((group) => {
+      runningBalance -= group.total;
+
+      return {
+        ...group,
+        projectedBalance: runningBalance,
+      };
+    });
+  }, [futureInstallments, projectedBalanceAfterInvoices]);
+
+  const monthlyForecast = useMemo<ForecastMonth[]>(() => {
+    const activeRecurrings = recurrings.filter((item) => item.active);
+
+    const monthlyRecurringIncome = activeRecurrings
+      .filter((item) => isIncomeType(item.type))
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const monthlyRecurringExpense = activeRecurrings
+      .filter((item) => isExpenseType(item.type))
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const months: ForecastMonth[] = [];
+    let runningBalance = projectedBalanceAfterInvoices;
+
+    for (let index = 0; index < 6; index += 1) {
+      const forecastDate = new Date(
+        selectedMonthMeta.year,
+        selectedMonthMeta.month - 1 + index,
+        1
+      );
+
+      const key = `${forecastDate.getFullYear()}-${String(
+        forecastDate.getMonth() + 1
+      ).padStart(2, "0")}`;
+
+      const label = forecastDate.toLocaleDateString("pt-BR", {
+        month: "long",
+        year: "numeric",
+      });
+
+      const installmentMonth = futureInstallmentsByMonth.find(
+        (item) => item.key === key
+      );
+
+      const installmentImpact = Number(installmentMonth?.total || 0);
+
+      runningBalance =
+        runningBalance +
+        monthlyRecurringIncome -
+        monthlyRecurringExpense -
+        installmentImpact;
+
+      months.push({
+        key,
+        label,
+        projectedBalance: runningBalance,
+        recurringIncome: monthlyRecurringIncome,
+        recurringExpense: monthlyRecurringExpense,
+        installmentImpact,
+        isCritical: runningBalance < 0,
+      });
+    }
+
+    return months;
+  }, [
+    recurrings,
+    projectedBalanceAfterInvoices,
+    futureInstallmentsByMonth,
+    selectedMonthMeta.year,
+    selectedMonthMeta.month,
+  ]);
+
+  const dailyBalanceProjection = useMemo(() => {
+    let runningBalance = currentAccountsBalance;
+    const dailyItems: {
+      day: number;
+      balance: number;
+      label: string;
+      isWorst?: boolean;
+    }[] = [];
+
+    for (let day = 1; day <= selectedMonthMeta.daysInMonth; day += 1) {
+      if (day === 1 && selectedMonthOpenInvoicesTotal > 0) {
+        runningBalance -= selectedMonthOpenInvoicesTotal;
+      }
+
+      const dayTransactions = filteredTransactions.filter((transaction) => {
+        const transactionDate = new Date(transaction.date);
+        return (
+          transactionDate.getDate() === day &&
+          !isAdjustmentTransaction(transaction)
+        );
+      });
+
+      dayTransactions.forEach((transaction) => {
+        if (isIncomeType(transaction.type)) {
+          runningBalance += Number(transaction.amount || 0);
+          return;
+        }
+
+        if (isExpenseType(transaction.type)) {
+          runningBalance -= Number(transaction.amount || 0);
+        }
+      });
+
+      const dayPendingRecurrings = [
+        ...monthlyRecurringProjection.pendingIncomeItems,
+        ...monthlyRecurringProjection.pendingExpenseItems,
+      ].filter((item) => {
+        const recurringDay = Math.min(
+          Math.max(Number(item.dayOfMonth || 1), 1),
+          selectedMonthMeta.daysInMonth
+        );
+
+        return recurringDay === day;
+      });
+
+      dayPendingRecurrings.forEach((item) => {
+        if (isIncomeType(item.type)) {
+          runningBalance += Number(item.amount || 0);
+          return;
+        }
+
+        if (isExpenseType(item.type)) {
+          runningBalance -= Number(item.amount || 0);
+        }
+      });
+
+      dailyItems.push({
+        day,
+        balance: runningBalance,
+        label: `${String(day).padStart(2, "0")}/${String(
+          selectedMonthMeta.month
+        ).padStart(2, "0")}`,
+      });
+    }
+
+    if (dailyItems.length === 0) return dailyItems;
+
+    const worstItem = dailyItems.reduce((lowest, current) =>
+      current.balance < lowest.balance ? current : lowest
+    );
+
+    return dailyItems.map((item) => ({
+      ...item,
+      isWorst: item.day === worstItem.day,
+    }));
+  }, [
+    currentAccountsBalance,
+    filteredTransactions,
+    monthlyRecurringProjection.pendingExpenseItems,
+    monthlyRecurringProjection.pendingIncomeItems,
+    selectedMonthMeta.daysInMonth,
+    selectedMonthMeta.month,
+    selectedMonthOpenInvoicesTotal,
+  ]);
+
+  const dailyProjectionSummary = useMemo(() => {
+    if (dailyBalanceProjection.length === 0) {
+      return {
+        lowestPoint: null as null | { day: number; balance: number; label: string },
+        highestPoint: null as null | { day: number; balance: number; label: string },
+        negativeDays: 0,
+      };
+    }
+
+    const lowestPoint = dailyBalanceProjection.reduce((lowest, current) =>
+      current.balance < lowest.balance ? current : lowest
+    );
+    const highestPoint = dailyBalanceProjection.reduce((highest, current) =>
+      current.balance > highest.balance ? current : highest
+    );
+    const negativeDays = dailyBalanceProjection.filter(
+      (item) => item.balance < 0
+    ).length;
+
+    return {
+      lowestPoint,
+      highestPoint,
+      negativeDays,
+    };
+  }, [dailyBalanceProjection]);
+
+  const spendingCapacitySummary = useMemo(() => {
+    const today = new Date();
+    const isCurrentSelectedMonth =
+      today.getFullYear() === selectedMonthMeta.year &&
+      today.getMonth() + 1 === selectedMonthMeta.month;
+
+    const referenceDay = isCurrentSelectedMonth
+      ? Math.min(today.getDate(), selectedMonthMeta.daysInMonth)
+      : 1;
+
+    const projectionFromReference = dailyBalanceProjection.filter(
+      (item) => item.day >= referenceDay
+    );
+
+    const lowestFutureBalance =
+      projectionFromReference.length > 0
+        ? projectionFromReference.reduce((lowest, current) =>
+            current.balance < lowest.balance ? current : lowest
+          )
+        : dailyProjectionSummary.lowestPoint;
+
+    const extraSafeSpend = Math.max(
+      0,
+      Number(lowestFutureBalance?.balance || 0)
+    );
+    const daysRemaining = Math.max(
+      1,
+      selectedMonthMeta.daysInMonth - referenceDay + 1
+    );
+    const safeDailySpend = extraSafeSpend / daysRemaining;
+
+    return {
+      isCurrentSelectedMonth,
+      referenceDay,
+      daysRemaining,
+      lowestFutureBalance,
+      extraSafeSpend,
+      safeDailySpend,
+      isNegativeScenario: (lowestFutureBalance?.balance || 0) < 0,
+    };
+  }, [
+    dailyBalanceProjection,
+    dailyProjectionSummary.lowestPoint,
+    selectedMonthMeta.daysInMonth,
+    selectedMonthMeta.month,
+    selectedMonthMeta.year,
+  ]);
+
+  const smartAlerts = useMemo<SmartAlert[]>(() => {
+    const alerts: SmartAlert[] = [];
+    const safeBalanceThreshold = 2000;
+
+    if (projectedBalanceReal < 0) {
+      alerts.push({
+        id: "negative-projected-balance",
+        title: "Saldo projetado negativo",
+        message: `Sua projeção total está negativa em ${formatCurrency(
+          Math.abs(projectedBalanceReal)
+        )}. Vale revisar cartão, parcelas e principalmente o peso das despesas futuras.`,
+        tone: "danger",
+      });
+    } else if (projectedBalanceReal < safeBalanceThreshold) {
+      alerts.push({
+        id: "low-projected-balance",
+        title: "Saldo projetado baixo",
+        message: `Depois de considerar faturas e parcelas futuras, seu saldo projetado fica em ${formatCurrency(
+          projectedBalanceReal
+        )}. Esse valor já merece atenção.`,
+        tone: "warning",
+      });
+    }
+
+    if (futureInstallmentsByMonth.length >= 3) {
+      alerts.push({
+        id: "three-months-card-impact",
+        title: "Impacto no cartão por vários meses",
+        message: `Você tem parcelas impactando ${futureInstallmentsByMonth.length} meses seguidos.`,
+        tone: "info",
+      });
+    }
+
+    if (dailyProjectionSummary.negativeDays > 0 && dailyProjectionSummary.lowestPoint) {
+      alerts.push({
+        id: "negative-days-ahead",
+        title: "Saldo negativo se aproxima",
+        message: `Seu ponto mais crítico acontece em ${dailyProjectionSummary.lowestPoint.label}, com projeção de ${formatCurrency(
+          dailyProjectionSummary.lowestPoint.balance
+        )}.`,
+        tone: "danger",
+      });
+    }
+
+    if (spendingCapacitySummary.extraSafeSpend < 500 && projectedBalanceReal >= 0) {
+      alerts.push({
+        id: "low-safe-margin",
+        title: "Folga pequena no mês",
+        message: `Sua margem segura para novos gastos está em ${formatCurrency(
+          spendingCapacitySummary.extraSafeSpend
+        )}.`,
+        tone: "warning",
+      });
+    }
+
+    if (alerts.length === 0) {
+      alerts.push({
+        id: "healthy-month",
+        title: "Mês sob controle",
+        message: "Sua leitura atual está saudável. Continue acompanhando as faturas e o ritmo do mês.",
+        tone: "success",
+      });
+    }
+
+    return alerts.slice(0, 4);
+  }, [
+    dailyProjectionSummary.lowestPoint,
+    dailyProjectionSummary.negativeDays,
+    futureInstallmentsByMonth.length,
+    projectedBalanceReal,
+    spendingCapacitySummary.extraSafeSpend,
+  ]);
+
+  const primaryStatus = useMemo(() => {
+    if (projectedBalanceReal < 0 || dailyProjectionSummary.negativeDays > 0) {
+      return {
+        tone: "danger" as const,
+        title: "Situação: Atenção máxima",
+        message: `Sua projeção financeira está negativa em ${formatCurrency(
+          Math.abs(projectedBalanceReal)
+        )}. O ideal agora é revisar faturas, compras futuras e prioridades do mês.`,
+      };
+    }
+
+    if (spendingCapacitySummary.extraSafeSpend < 500) {
+      return {
+        tone: "warning" as const,
+        title: "Situação: Atenção",
+        message: `Sua folga está curta. Hoje a margem segura está em ${formatCurrency(
+          spendingCapacitySummary.extraSafeSpend
+        )}.`,
+      };
+    }
+
+    return {
+      tone: "success" as const,
+      title: "Situação: Saudável",
+      message: "Seu momento está equilibrado. O foco agora é manter o ritmo e evitar excessos desnecessários.",
+    };
+  }, [
+    dailyProjectionSummary.negativeDays,
+    projectedBalanceReal,
+    spendingCapacitySummary.extraSafeSpend,
+  ]);
+
+  const nextAction = useMemo(() => {
+    if (selectedMonthOpenInvoicesTotal > 0) {
+      return `Olhe primeiro suas faturas em aberto. Hoje elas somam ${formatCurrency(
+        selectedMonthOpenInvoicesTotal
+      )}.`;
+    }
+
+    if (futureInstallmentsTotal > 0) {
+      return `Cheque suas compras parceladas futuras. Elas já comprometem ${formatCurrency(
+        futureInstallmentsTotal
+      )} dos próximos meses.`;
+    }
+
+    if (monthlyRecurringProjection.expensesTotal > monthlyRecurringProjection.incomesTotal) {
+      return "Revise suas recorrências: suas saídas pendentes do mês estão maiores que as entradas previstas.";
+    }
+
+    return "Seu cenário está estável. Use esta página para acompanhar riscos e decidir o próximo passo com mais segurança.";
+  }, [
+    futureInstallmentsTotal,
+    monthlyRecurringProjection.expensesTotal,
+    monthlyRecurringProjection.incomesTotal,
+    selectedMonthOpenInvoicesTotal,
+  ]);
+
+
+  const assistantSummary = useMemo(() => {
+    if (selectedMonthOpenInvoicesTotal > 0) {
+      return {
+        tone: "danger" as const,
+        eyebrow: "Seu próximo passo",
+        title: "Revise suas faturas abertas hoje",
+        action: `Hoje elas somam ${formatCurrency(selectedMonthOpenInvoicesTotal)}.`,
+        impact: "Evitar novas compras no crédito agora ajuda a preservar sua folga do mês.",
+      };
+    }
+
+    if (futureInstallmentsTotal > 0) {
+      return {
+        tone: "warning" as const,
+        eyebrow: "Seu próximo passo",
+        title: "Segure novas compras parceladas",
+        action: `${formatCurrency(futureInstallmentsTotal)} já estão comprometidos nos próximos meses.`,
+        impact: "Priorize compras à vista só se couberem na sua margem segura diária.",
+      };
+    }
+
+    if (spendingCapacitySummary.extraSafeSpend <= 0) {
+      return {
+        tone: "danger" as const,
+        eyebrow: "Seu próximo passo",
+        title: "Evite novos gastos hoje",
+        action: "Sua margem segura está zerada para o mês filtrado.",
+        impact: "Concentrar-se em registrar entradas e revisar saídas reduz o risco de fechar no vermelho.",
+      };
+    }
+
+    if (spendingCapacitySummary.extraSafeSpend < 500) {
+      return {
+        tone: "warning" as const,
+        eyebrow: "Seu próximo passo",
+        title: "Use o modo econômico hoje",
+        action: `Sua folga segura total é de ${formatCurrency(spendingCapacitySummary.extraSafeSpend)}.`,
+        impact: `Tente manter seus gastos diários abaixo de ${formatCurrency(spendingCapacitySummary.safeDailySpend)}.`,
+      };
+    }
+
+    return {
+      tone: "success" as const,
+      eyebrow: "Seu próximo passo",
+      title: "Mantenha o ritmo atual",
+      action: "Seu cenário está estável neste momento.",
+      impact: "Continue registrando o dia e acompanhe a página para agir cedo se algo mudar.",
+    };
+  }, [
+    futureInstallmentsTotal,
+    selectedMonthOpenInvoicesTotal,
+    spendingCapacitySummary.extraSafeSpend,
+    spendingCapacitySummary.safeDailySpend,
+  ]);
+
+  const assistantChecklist = useMemo(() => {
+    return [
+      {
+        id: "launch-today",
+        label: "Lançar o que entrou ou saiu hoje",
+        done: totalIncomes > 0 || totalExpenses > 0,
+      },
+      {
+        id: "review-invoices",
+        label: "Revisar faturas abertas",
+        done: openInvoicesTotal <= 0,
+      },
+      {
+        id: "check-safe-limit",
+        label: "Conferir se ainda está dentro do gasto seguro",
+        done: spendingCapacitySummary.extraSafeSpend > 0,
+      },
+    ];
+  }, [openInvoicesTotal, spendingCapacitySummary.extraSafeSpend, totalExpenses, totalIncomes]);
+
+  const quickReading = useMemo(() => {
+    return {
+      accountsBalance: currentAccountsBalance,
+      monthResult: totalIncomes - totalExpenses,
+      openInvoicesTotal,
+      futureInstallmentsTotal,
+      recurringIncome: monthlyRecurringProjection.incomesTotal,
+      recurringExpense: monthlyRecurringProjection.expensesTotal,
+    };
+  }, [
+    currentAccountsBalance,
+    futureInstallmentsTotal,
+    monthlyRecurringProjection.expensesTotal,
+    monthlyRecurringProjection.incomesTotal,
+    openInvoicesTotal,
+    totalExpenses,
+    totalIncomes,
+  ]);
+
+  return (
+    <main className="min-h-screen bg-slate-50 px-4 py-6">
+      <div className="mx-auto max-w-4xl space-y-6">
+        <header className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500">Leitura inteligente</p>
+              <h1 className="text-3xl font-bold text-slate-900">
+                Inteligência financeira
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Veja riscos, próximos impactos e o que vale fazer agora.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:items-end">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href="/"
+                  className="text-sm font-medium text-slate-600 transition hover:text-slate-900"
+                >
+                  Voltar
+                </Link>
+
+                <Link
+                  href="/simular-compra"
+                  className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Simular compra
+                </Link>
+
+                <Link
+                  href="/simulation-history"
+                  className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Ver histórico
+                </Link>
+              </div>
+
+              <label className="text-sm font-medium text-slate-700">
+                Mês
+              </label>
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-slate-400"
+              />
+            </div>
+          </div>
+        </header>
+
+        {loading ? (
+          <div className="rounded-3xl bg-white p-10 text-center text-slate-500 shadow-sm">
+            Carregando inteligência financeira...
+          </div>
+        ) : (
+          <>
+            <section className={`rounded-3xl border p-5 shadow-sm ${getAlertStyles(assistantSummary.tone).container}`}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {assistantSummary.eyebrow}
+                  </p>
+                  <h2 className={`mt-2 text-xl font-bold ${getAlertStyles(assistantSummary.tone).title}`}>
+                    {assistantSummary.title}
+                  </h2>
+                  <p className={`mt-2 text-sm ${getAlertStyles(assistantSummary.tone).text}`}>
+                    {assistantSummary.action}
+                  </p>
+                  <p className={`mt-1 text-sm ${getAlertStyles(assistantSummary.tone).text}`}>
+                    {assistantSummary.impact}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/60 bg-white/60 p-4 lg:min-w-[280px]">
+                  <p className="text-sm font-semibold text-slate-900">Checklist do dia</p>
+                  <div className="mt-3 space-y-2">
+                    {assistantChecklist.map((item) => (
+                      <div key={item.id} className="flex items-start gap-2">
+                        <span
+                          className={`mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold ${
+                            item.done
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-200 text-slate-500"
+                          }`}
+                        >
+                          {item.done ? "✓" : "•"}
+                        </span>
+                        <p className={`text-sm ${item.done ? "text-slate-700" : "text-slate-600"}`}>
+                          {item.label}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className={`rounded-3xl border p-5 shadow-sm ${getAlertStyles(primaryStatus.tone).container}`}>
+              <p className={`text-sm font-semibold ${getAlertStyles(primaryStatus.tone).title}`}>
+                {primaryStatus.title}
+              </p>
+              <p className={`mt-1 text-sm ${getAlertStyles(primaryStatus.tone).text}`}>
+                {primaryStatus.message}
+              </p>
+            </section>
+
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-sm font-semibold text-slate-900">
+                O que fazer agora
+              </p>
+              <p className="mt-2 text-sm text-slate-600">{nextAction}</p>
+            </section>
+
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-3xl bg-white p-5 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Contas agora
+                </p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {formatCurrency(quickReading.accountsBalance)}
+                </p>
+              </div>
+
+              <div className="rounded-3xl bg-white p-5 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Resultado do mês
+                </p>
+                <p className={`mt-2 text-2xl font-bold ${quickReading.monthResult < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                  {formatCurrency(quickReading.monthResult)}
+                </p>
+              </div>
+
+              <div className="rounded-3xl bg-white p-5 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Faturas em aberto
+                </p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {formatCurrency(quickReading.openInvoicesTotal)}
+                </p>
+              </div>
+
+              <div className="rounded-3xl bg-white p-5 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Gasto seguro
+                </p>
+                <p className={`mt-2 text-2xl font-bold ${spendingCapacitySummary.extraSafeSpend <= 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                  {formatCurrency(spendingCapacitySummary.extraSafeSpend)}
+                </p>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Alertas importantes
+              </h2>
+
+              <div className="space-y-3">
+                {smartAlerts.map((alert) => {
+                  const styles = getAlertStyles(alert.tone);
+
+                  return (
+                    <div
+                      key={alert.id}
+                      className={`rounded-2xl border p-4 ${styles.container}`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className={`text-sm font-semibold ${styles.title}`}>
+                          {alert.title}
+                        </p>
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${styles.badge}`}>
+                          {styles.label}
+                        </span>
+                      </div>
+                      <p className={`mt-1 text-sm ${styles.text}`}>
+                        {alert.message}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Próximos meses
+                </h2>
+                <span className="text-xs text-slate-500">
+                  {monthlyForecast.filter((item) => item.isCritical).length} mês(es) em risco
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {monthlyForecast.map((month) => (
+                  <div
+                    key={month.key}
+                    className={`rounded-2xl border p-4 ${
+                      month.isCritical
+                        ? "border-rose-200 bg-rose-50"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      {month.label}
+                    </p>
+                    <p className={`mt-2 text-xl font-bold ${month.isCritical ? "text-rose-600" : "text-emerald-600"}`}>
+                      {formatCurrency(month.projectedBalance)}
+                    </p>
+
+                    <div className="mt-3 space-y-1 text-xs text-slate-500">
+                      <p>Entradas recorrentes: {formatCurrency(month.recurringIncome)}</p>
+                      <p>Saídas recorrentes: {formatCurrency(month.recurringExpense)}</p>
+                      <p>Parcelas futuras: {formatCurrency(month.installmentImpact)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <p className="text-sm font-semibold text-slate-900">
+                  Quanto você pode gastar com segurança
+                </p>
+                <p className={`mt-2 text-3xl font-bold ${spendingCapacitySummary.extraSafeSpend <= 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                  {formatCurrency(spendingCapacitySummary.extraSafeSpend)}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Baseado na sua projeção atual para o mês filtrado.
+                </p>
+
+                <div className="mt-4 space-y-1 text-xs text-slate-500">
+                  <p>Limite seguro por dia: {formatCurrency(spendingCapacitySummary.safeDailySpend)}</p>
+                  <p>Dias restantes considerados: {spendingCapacitySummary.daysRemaining}</p>
+                  {spendingCapacitySummary.lowestFutureBalance && (
+                    <p>
+                      Ponto mais apertado: dia {spendingCapacitySummary.lowestFutureBalance.day} com{" "}
+                      {formatCurrency(spendingCapacitySummary.lowestFutureBalance.balance)}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <p className="text-sm font-semibold text-slate-900">
+                  Leitura rápida
+                </p>
+
+                <div className="mt-4 space-y-3 text-sm text-slate-600">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Entradas do mês</span>
+                    <span className="font-semibold text-emerald-600">
+                      {formatCurrency(totalIncomes)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Saídas do mês</span>
+                    <span className="font-semibold text-rose-600">
+                      {formatCurrency(totalExpenses)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Recorrências pendentes</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatCurrency(
+                        monthlyRecurringProjection.expensesTotal -
+                          monthlyRecurringProjection.incomesTotal
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Parcelas futuras</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatCurrency(futureInstallmentsTotal)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Faturas abertas</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatCurrency(openInvoicesTotal)}
+                    </span>
+                  </div>
+
+                  {dailyProjectionSummary.lowestPoint && (
+                    <div className="rounded-2xl bg-slate-50 p-3 text-xs text-slate-500">
+                      Momento mais apertado em{" "}
+                      <span className="font-semibold text-slate-700">
+                        {dailyProjectionSummary.lowestPoint.label}
+                      </span>{" "}
+                      com projeção de{" "}
+                      <span className="font-semibold text-slate-700">
+                        {formatCurrency(dailyProjectionSummary.lowestPoint.balance)}
+                      </span>.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+      </div>
+    </main>
+  );
+}

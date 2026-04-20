@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { InvoiceStatus, TransactionType } from "@prisma/client";
+import { InvoiceStatus, Prisma, TransactionType } from "@prisma/client";
 import { requireCurrentUser } from "@/lib/current-user";
 
 type RouteContext = {
@@ -69,14 +69,23 @@ function normalizeIsFixed(value: unknown): boolean {
   return false;
 }
 
-async function applyAccountBalanceChange(params: {
-  accountId: string;
-  type: TransactionType;
-  amount: number;
-}) {
+function normalizeOptionalString(value?: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+async function applyAccountBalanceChange(
+  tx: Prisma.TransactionClient,
+  params: {
+    accountId: string;
+    type: TransactionType;
+    amount: number;
+  }
+) {
   const { accountId, type, amount } = params;
 
-  await prisma.accounts.update({
+  await tx.accounts.update({
     where: { id: accountId },
     data: {
       balance: {
@@ -86,14 +95,17 @@ async function applyAccountBalanceChange(params: {
   });
 }
 
-async function revertAccountBalanceChange(params: {
-  accountId: string;
-  type: TransactionType;
-  amount: number;
-}) {
+async function revertAccountBalanceChange(
+  tx: Prisma.TransactionClient,
+  params: {
+    accountId: string;
+    type: TransactionType;
+    amount: number;
+  }
+) {
   const { accountId, type, amount } = params;
 
-  await prisma.accounts.update({
+  await tx.accounts.update({
     where: { id: accountId },
     data: {
       balance: {
@@ -103,8 +115,12 @@ async function revertAccountBalanceChange(params: {
   });
 }
 
-async function recalculateInvoiceTotal(invoiceId: string, userId: string) {
-  const transactions = await prisma.transaction.findMany({
+async function recalculateInvoiceTotal(
+  tx: Prisma.TransactionClient,
+  invoiceId: string,
+  userId: string
+) {
+  const transactions = await tx.transaction.findMany({
     where: {
       invoiceId,
       userId,
@@ -118,7 +134,7 @@ async function recalculateInvoiceTotal(invoiceId: string, userId: string) {
   );
 
   if (transactions.length === 0) {
-    await prisma.invoice.deleteMany({
+    await tx.invoice.deleteMany({
       where: {
         id: invoiceId,
         userId,
@@ -128,12 +144,123 @@ async function recalculateInvoiceTotal(invoiceId: string, userId: string) {
     return;
   }
 
-  await prisma.invoice.update({
+  await tx.invoice.update({
     where: { id: invoiceId },
     data: {
       total,
     },
   });
+}
+
+async function getOrCreateOpenInvoice(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    cardId: string;
+    month: number;
+    year: number;
+  }
+) {
+  const { userId, cardId, month, year } = params;
+
+  const existing = await tx.invoice.findFirst({
+    where: {
+      userId,
+      cardId,
+      month,
+      year,
+    },
+  });
+
+  if (existing) {
+    if (existing.status === InvoiceStatus.PAID) {
+      throw new Error(
+        "Não é possível vincular a transação a uma fatura já paga."
+      );
+    }
+
+    return existing;
+  }
+
+  return tx.invoice.create({
+    data: {
+      cardId,
+      month,
+      year,
+      total: 0,
+      status: InvoiceStatus.OPEN,
+      userId,
+    },
+  });
+}
+
+async function validateCardLimit(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    cardId: string;
+    purchaseAmount: number;
+    ignoredInvoiceIds?: string[];
+  }
+) {
+  const { userId, cardId, purchaseAmount, ignoredInvoiceIds = [] } = params;
+
+  const card = await tx.cards.findFirst({
+    where: {
+      id: cardId,
+      userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      limit: true,
+      invoices: {
+        where: {
+          userId,
+          status: InvoiceStatus.OPEN,
+          NOT: ignoredInvoiceIds.length
+            ? {
+                id: {
+                  in: ignoredInvoiceIds,
+                },
+              }
+            : undefined,
+        },
+        select: {
+          total: true,
+        },
+      },
+    },
+  });
+
+  if (!card) {
+    throw new Error("Cartão não encontrado ou sem permissão.");
+  }
+
+  const limitValue = Number(card.limit ?? 0);
+
+  if (limitValue <= 0) {
+    return;
+  }
+
+  const openInvoiceTotal = card.invoices.reduce(
+    (sum, invoice) => sum + Number(invoice.total ?? 0),
+    0
+  );
+
+  const availableLimit = limitValue - openInvoiceTotal;
+
+  if (purchaseAmount > availableLimit) {
+    throw new Error(
+      `Limite insuficiente no cartão ${card.name}. Disponível: ${availableLimit.toLocaleString(
+        "pt-BR",
+        {
+          style: "currency",
+          currency: "BRL",
+        }
+      )}.`
+    );
+  }
 }
 
 export async function PATCH(
@@ -189,7 +316,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           error:
-            "Edição de compra parcelada ainda não está disponível. Exclua a compra e lance novamente.",
+            "Edição de compra parcelada não está disponível por esta rota. Exclua a compra inteira e lance novamente.",
         },
         { status: 400 }
       );
@@ -219,163 +346,163 @@ export async function PATCH(
 
     const parsedDate = safeParseDate(date || createdAt);
     const normalizedIsFixed = normalizeIsFixed(isFixed);
+    const normalizedTitle = String(title).trim();
+    const normalizedCategory = normalizeOptionalString(category);
+    const normalizedPaymentMethod = normalizeOptionalString(paymentMethod);
+    const normalizedAccountId = normalizeOptionalString(accountId);
+    const normalizedCardId = normalizeOptionalString(cardId);
     const isExpense = normalizedType === TransactionType.EXPENSE;
-    const isCreditCardPayment = paymentMethod === "credit_card";
+    const isCreditCardPayment = normalizedPaymentMethod === "credit_card";
 
-    if (isCreditCardPayment && !cardId) {
+    if (isCreditCardPayment && !normalizedCardId) {
       return NextResponse.json(
         { error: "Selecione um cartão para compras no crédito." },
         { status: 400 }
       );
     }
 
-    if (!isCreditCardPayment && paymentMethod !== "voucher" && !accountId) {
+    if (!isCreditCardPayment && normalizedPaymentMethod !== "voucher" && !normalizedAccountId) {
       return NextResponse.json(
         { error: "Selecione uma conta." },
         { status: 400 }
       );
     }
 
-    if (accountId) {
-      const account = await prisma.accounts.findFirst({
-        where: {
-          id: accountId,
-          userId: user.id,
-        },
-        select: { id: true },
-      });
-
-      if (!account) {
-        return NextResponse.json(
-          { error: "Conta não encontrada ou sem permissão." },
-          { status: 404 }
-        );
-      }
-    }
-
-    if (cardId) {
-      const card = await prisma.cards.findFirst({
-        where: {
-          id: cardId,
-          userId: user.id,
-        },
-        select: { id: true },
-      });
-
-      if (!card) {
-        return NextResponse.json(
-          { error: "Cartão não encontrado ou sem permissão." },
-          { status: 404 }
-        );
-      }
-    }
-
-    let nextInvoiceId: string | null = null;
-
-    if (isCreditCardPayment && isExpense) {
-      const month = parsedDate.getMonth() + 1;
-      const year = parsedDate.getFullYear();
-
-      let invoice = await prisma.invoice.findFirst({
-        where: {
-          cardId,
-          month,
-          year,
-          userId: user.id,
-        },
-      });
-
-      if (!invoice) {
-        invoice = await prisma.invoice.create({
-          data: {
-            cardId,
-            month,
-            year,
-            total: 0,
-            status: InvoiceStatus.OPEN,
+    const result = await prisma.$transaction(async (tx) => {
+      if (normalizedAccountId) {
+        const account = await tx.accounts.findFirst({
+          where: {
+            id: normalizedAccountId,
             userId: user.id,
           },
+          select: { id: true },
+        });
+
+        if (!account) {
+          throw new Error("Conta não encontrada ou sem permissão.");
+        }
+      }
+
+      if (normalizedCardId) {
+        const card = await tx.cards.findFirst({
+          where: {
+            id: normalizedCardId,
+            userId: user.id,
+          },
+          select: { id: true },
+        });
+
+        if (!card) {
+          throw new Error("Cartão não encontrado ou sem permissão.");
+        }
+      }
+
+      let nextInvoiceId: string | null = null;
+
+      if (isCreditCardPayment && isExpense && normalizedCardId) {
+        const month = parsedDate.getMonth() + 1;
+        const year = parsedDate.getFullYear();
+
+        const invoice = await getOrCreateOpenInvoice(tx, {
+          userId: user.id,
+          cardId: normalizedCardId,
+          month,
+          year,
+        });
+
+        nextInvoiceId = invoice.id;
+
+        await validateCardLimit(tx, {
+          userId: user.id,
+          cardId: normalizedCardId,
+          purchaseAmount: numericAmount,
+          ignoredInvoiceIds: [transaction.invoiceId].filter(
+            (value): value is string => Boolean(value)
+          ),
         });
       }
 
-      nextInvoiceId = invoice.id;
-    }
+      const previousInvoiceId = transaction.invoiceId;
+      const nextAccountId =
+        isCreditCardPayment || normalizedPaymentMethod === "voucher"
+          ? null
+          : normalizedAccountId;
 
-    const previousInvoiceId = transaction.invoiceId;
-    const nextAccountId =
-      isCreditCardPayment || paymentMethod === "voucher"
-        ? null
-        : accountId || null;
-
-    const previousShouldAffectBalance = shouldAffectAccountBalance({
-      accountId: transaction.accountId,
-      paymentMethod: transaction.paymentMethod,
-    });
-
-    const nextShouldAffectBalance = shouldAffectAccountBalance({
-      accountId: nextAccountId,
-      paymentMethod: paymentMethod || null,
-    });
-
-    const updatedTransaction = await prisma.transaction.update({
-      where: { id: transaction.id },
-      data: {
-        title: String(title).trim(),
-        amount: numericAmount,
-        type: normalizedType,
-        category: category || null,
-        paymentMethod: paymentMethod || null,
-        date: parsedDate,
-        isFixed: normalizedIsFixed,
-        accountId: nextAccountId,
-        cardId: isCreditCardPayment ? cardId || null : null,
-        invoiceId: nextInvoiceId,
-      },
-      include: {
-        account: true,
-        card: true,
-        invoice: true,
-      },
-    });
-
-    const affectedInvoiceIds = Array.from(
-      new Set(
-        [previousInvoiceId, nextInvoiceId].filter(
-          (value): value is string => Boolean(value)
-        )
-      )
-    );
-
-    for (const invoiceId of affectedInvoiceIds) {
-      await recalculateInvoiceTotal(invoiceId, user.id);
-    }
-
-    if (previousShouldAffectBalance && transaction.accountId) {
-      await revertAccountBalanceChange({
+      const previousShouldAffectBalance = shouldAffectAccountBalance({
         accountId: transaction.accountId,
-        type: transaction.type,
-        amount: Number(transaction.amount || 0),
+        paymentMethod: transaction.paymentMethod,
       });
-    }
 
-    if (nextShouldAffectBalance && nextAccountId) {
-      await applyAccountBalanceChange({
+      const nextShouldAffectBalance = shouldAffectAccountBalance({
         accountId: nextAccountId,
-        type: normalizedType,
-        amount: numericAmount,
+        paymentMethod: normalizedPaymentMethod,
       });
-    }
 
-    return NextResponse.json({
-      ...updatedTransaction,
-      amount: Number(updatedTransaction.amount),
+      if (previousShouldAffectBalance && transaction.accountId) {
+        await revertAccountBalanceChange(tx, {
+          accountId: transaction.accountId,
+          type: transaction.type,
+          amount: Number(transaction.amount || 0),
+        });
+      }
+
+      const updatedTransaction = await tx.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          title: normalizedTitle,
+          amount: numericAmount,
+          type: normalizedType,
+          category: normalizedCategory,
+          paymentMethod: normalizedPaymentMethod,
+          date: parsedDate,
+          isFixed: normalizedIsFixed,
+          accountId: nextAccountId,
+          cardId: isCreditCardPayment ? normalizedCardId : null,
+          invoiceId: nextInvoiceId,
+        },
+        include: {
+          account: true,
+          card: true,
+          invoice: true,
+        },
+      });
+
+      if (nextShouldAffectBalance && nextAccountId) {
+        await applyAccountBalanceChange(tx, {
+          accountId: nextAccountId,
+          type: normalizedType,
+          amount: numericAmount,
+        });
+      }
+
+      const affectedInvoiceIds = Array.from(
+        new Set(
+          [previousInvoiceId, nextInvoiceId].filter(
+            (value): value is string => Boolean(value)
+          )
+        )
+      );
+
+      for (const invoiceId of affectedInvoiceIds) {
+        await recalculateInvoiceTotal(tx, invoiceId, user.id);
+      }
+
+      return {
+        ...updatedTransaction,
+        amount: Number(updatedTransaction.amount),
+      };
     });
+
+    return NextResponse.json(result);
   } catch (error) {
     console.error("Erro ao editar transação:", error);
 
+    const message =
+      error instanceof Error ? error.message : "Erro ao editar transação";
+
     return NextResponse.json(
       {
-        error: "Erro ao editar transação",
+        error: message,
         details: String(error),
       },
       { status: 500 }
@@ -421,117 +548,120 @@ export async function DELETE(
       );
     }
 
-    if (transaction.purchaseGroupId) {
-      const groupTransactions = await prisma.transaction.findMany({
-        where: {
-          purchaseGroupId: transaction.purchaseGroupId,
-          userId: user.id,
-        },
-        include: {
-          invoice: true,
-        },
-      });
-
-      const hasPaidInvoice = groupTransactions.some(
-        (item) => item.invoice?.status === InvoiceStatus.PAID
-      );
-
-      if (hasPaidInvoice) {
-        return NextResponse.json(
-          {
-            error:
-              "Não é permitido excluir esta compra parcelada porque existe parcela vinculada a uma fatura já paga.",
+    const result = await prisma.$transaction(async (tx) => {
+      if (transaction.purchaseGroupId) {
+        const groupTransactions = await tx.transaction.findMany({
+          where: {
+            purchaseGroupId: transaction.purchaseGroupId,
+            userId: user.id,
           },
-          { status: 400 }
-        );
-      }
-
-      if (!deleteGroup) {
-        return NextResponse.json(
-          {
-            requiresConfirmation: true,
-            message:
-              "Esta transação faz parte de uma compra parcelada. Deseja excluir a compra inteira?",
+          include: {
+            invoice: true,
           },
-          { status: 409 }
+        });
+
+        const hasPaidInvoice = groupTransactions.some(
+          (item) => item.invoice?.status === InvoiceStatus.PAID
         );
-      }
 
-      const affectedInvoiceIds = Array.from(
-        new Set(
-          groupTransactions
-            .map((item) => item.invoiceId)
-            .filter((value): value is string => Boolean(value))
-        )
-      );
-
-      for (const item of groupTransactions) {
-        if (
-          shouldAffectAccountBalance({
-            accountId: item.accountId,
-            paymentMethod: item.paymentMethod,
-          }) &&
-          item.accountId
-        ) {
-          await revertAccountBalanceChange({
-            accountId: item.accountId,
-            type: item.type,
-            amount: Number(item.amount || 0),
-          });
+        if (hasPaidInvoice) {
+          throw new Error(
+            "Não é permitido excluir esta compra parcelada porque existe parcela vinculada a uma fatura já paga."
+          );
         }
+
+        if (!deleteGroup) {
+          return NextResponse.json(
+            {
+              requiresConfirmation: true,
+              message:
+                "Esta transação faz parte de uma compra parcelada. Deseja excluir a compra inteira?",
+            },
+            { status: 409 }
+          );
+        }
+
+        const affectedInvoiceIds = Array.from(
+          new Set(
+            groupTransactions
+              .map((item) => item.invoiceId)
+              .filter((value): value is string => Boolean(value))
+          )
+        );
+
+        for (const item of groupTransactions) {
+          if (
+            shouldAffectAccountBalance({
+              accountId: item.accountId,
+              paymentMethod: item.paymentMethod,
+            }) &&
+            item.accountId
+          ) {
+            await revertAccountBalanceChange(tx, {
+              accountId: item.accountId,
+              type: item.type,
+              amount: Number(item.amount || 0),
+            });
+          }
+        }
+
+        await tx.transaction.deleteMany({
+          where: {
+            purchaseGroupId: transaction.purchaseGroupId,
+            userId: user.id,
+          },
+        });
+
+        for (const invoiceId of affectedInvoiceIds) {
+          await recalculateInvoiceTotal(tx, invoiceId, user.id);
+        }
+
+        return NextResponse.json({
+          success: true,
+          deletedGroup: true,
+        });
       }
 
-      await prisma.transaction.deleteMany({
-        where: {
-          purchaseGroupId: transaction.purchaseGroupId,
-          userId: user.id,
-        },
+      const affectedInvoiceId = transaction.invoiceId || null;
+
+      if (
+        shouldAffectAccountBalance({
+          accountId: transaction.accountId,
+          paymentMethod: transaction.paymentMethod,
+        }) &&
+        transaction.accountId
+      ) {
+        await revertAccountBalanceChange(tx, {
+          accountId: transaction.accountId,
+          type: transaction.type,
+          amount: Number(transaction.amount || 0),
+        });
+      }
+
+      await tx.transaction.delete({
+        where: { id: transaction.id },
       });
 
-      for (const invoiceId of affectedInvoiceIds) {
-        await recalculateInvoiceTotal(invoiceId, user.id);
+      if (affectedInvoiceId) {
+        await recalculateInvoiceTotal(tx, affectedInvoiceId, user.id);
       }
 
       return NextResponse.json({
         success: true,
-        deletedGroup: true,
+        deletedGroup: false,
       });
-    }
-
-    const affectedInvoiceId = transaction.invoiceId || null;
-
-    if (
-      shouldAffectAccountBalance({
-        accountId: transaction.accountId,
-        paymentMethod: transaction.paymentMethod,
-      }) &&
-      transaction.accountId
-    ) {
-      await revertAccountBalanceChange({
-        accountId: transaction.accountId,
-        type: transaction.type,
-        amount: Number(transaction.amount || 0),
-      });
-    }
-
-    await prisma.transaction.delete({
-      where: { id: transaction.id },
     });
 
-    if (affectedInvoiceId) {
-      await recalculateInvoiceTotal(affectedInvoiceId, user.id);
-    }
-
-    return NextResponse.json({
-      success: true,
-      deletedGroup: false,
-    });
+    return result;
   } catch (error) {
     console.error("Erro ao excluir transação:", error);
 
+    const message =
+      error instanceof Error ? error.message : "Erro ao excluir transação";
+
     return NextResponse.json(
       {
-        error: "Erro ao excluir transação",
+        error: message,
         details: String(error),
       },
       { status: 500 }

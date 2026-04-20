@@ -2,8 +2,9 @@
 "use client";
 
 import LogoutButton from "@/components/logout-button";
+import { createCardInitialBalance } from "@/app/actions";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   PieChart,
   Pie,
@@ -33,6 +34,7 @@ type Transaction = {
   installmentTotal?: number | null;
   purchaseGroupId?: string | null;
   isFixed?: boolean | null;
+  isAdjustment?: boolean | null;
   date: string;
   account?: {
     id: string;
@@ -278,6 +280,78 @@ function getFlowTypeLabel(isFixed?: boolean | null) {
   return isFixed ? "Fixa" : "Variável";
 }
 
+function getImmediateCategoryAction(category?: string | null) {
+  const normalized = normalizeComparableText(category);
+
+  if (normalized.includes("aliment")) {
+    return "Evite gastos fora de casa hoje";
+  }
+  if (normalized.includes("transporte")) {
+    return "Segure corridas e deslocamentos não essenciais hoje";
+  }
+  if (normalized.includes("lazer")) {
+    return "Pause gastos de lazer até o ritmo normalizar";
+  }
+  if (normalized.includes("pessoal")) {
+    return "Adie compras pessoais que não sejam prioridade";
+  }
+  if (normalized.includes("vest")) {
+    return "Evite compras de roupa por agora";
+  }
+  if (normalized.includes("casa")) {
+    return "Compre só o essencial para casa";
+  }
+  if (normalized.includes("pet")) {
+    return "Mantenha apenas os gastos necessários do pet hoje";
+  }
+  if (normalized.includes("sa")) {
+    return "Revise o que é realmente necessário nesta categoria";
+  }
+  if (normalized.includes("skin")) {
+    return "Pause reposições e compras de skincare por enquanto";
+  }
+  if (normalized.includes("reforma")) {
+    return "Segure itens de reforma que possam esperar";
+  }
+  if (normalized.includes("eletron")) {
+    return "Evite compras de tecnologia neste momento";
+  }
+
+  return "Reduza gastos variáveis hoje";
+}
+
+function getPaceStatusLabel(status: "controlled" | "attention" | "off_track" | "future") {
+  switch (status) {
+    case "off_track":
+      return "Fora do ritmo";
+    case "attention":
+      return "Pedindo atenção";
+    case "future":
+      return "Mês futuro";
+    default:
+      return "No ritmo";
+  }
+}
+
+function getPaceRecoveryHint(
+  paceDifference: number,
+  daysRemaining: number,
+  isCurrentSelectedMonth: boolean
+) {
+  if (paceDifference <= 0) return "Você está dentro do ritmo desta categoria.";
+
+  if (!isCurrentSelectedMonth) {
+    return `O desvio atual está em ${formatCurrency(paceDifference)}.`;
+  }
+
+  const safeDaysRemaining = Math.max(daysRemaining, 1);
+  const suggestedDailyAdjustment = paceDifference / safeDaysRemaining;
+
+  return `Se reduzir cerca de ${formatCurrency(
+    suggestedDailyAdjustment
+  )} por dia até o fim do mês, você volta para o ritmo.`;
+}
+
 function getGoalsStorageKey(selectedMonth: string) {
   return `category-goals:${selectedMonth}`;
 }
@@ -328,6 +402,19 @@ function isInstallmentTransaction(transaction: Transaction) {
 
   const parsed = extractInstallmentInfo(transaction.title);
   return !!parsed && parsed.total > 1;
+}
+
+function isAdjustmentTransaction(transaction?: Transaction | null) {
+  if (!transaction) return false;
+  if (transaction.isAdjustment) return true;
+
+  const normalizedTitle = normalizeComparableText(transaction.title);
+  return (
+    normalizedTitle === "saldo anterior" ||
+    normalizedTitle === "saldo inicial da fatura" ||
+    normalizedTitle === "ajuste inicial do cartao" ||
+    normalizedTitle === "ajuste inicial do cartão"
+  );
 }
 
 function getAlertStyles(tone: SmartAlert["tone"]) {
@@ -529,6 +616,10 @@ export default function DashboardPage() {
   const [alertStates, setAlertStates] = useState<Record<string, AlertStateItem>>({});
   const [dailyReviewHistory, setDailyReviewHistory] = useState<Record<string, DailyReviewEntry>>({});
   const [resettingData, setResettingData] = useState(false);
+  const [initialBalanceCardId, setInitialBalanceCardId] = useState("");
+  const [initialBalanceAmount, setInitialBalanceAmount] = useState("");
+  const [initialBalanceDate, setInitialBalanceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [initialBalanceSubmitting, setInitialBalanceSubmitting] = useState(false);
 
   function showToast(
     title: string,
@@ -541,6 +632,67 @@ export default function DashboardPage() {
       message,
       tone,
     });
+  }
+
+  async function handleCreateCardInitialBalance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!initialBalanceCardId) {
+      showToast("Selecione um cartão", "Escolha o cartão que já possui saldo em aberto.", "error");
+      return;
+    }
+
+    if (!initialBalanceAmount.trim()) {
+      showToast("Informe o valor", "Digite o saldo inicial da fatura para continuar.", "error");
+      return;
+    }
+
+    try {
+      setInitialBalanceSubmitting(true);
+
+      await createCardInitialBalance({
+        cardId: initialBalanceCardId,
+        amount: initialBalanceAmount,
+        date: initialBalanceDate,
+      });
+
+      const selectedCard = cards.find((card) => card.id === initialBalanceCardId);
+
+      setInitialBalanceAmount("");
+      setInitialBalanceCardId("");
+      setInitialBalanceDate(new Date().toISOString().slice(0, 10));
+
+      await loadDashboardData();
+
+      showToast(
+        "Saldo inicial lançado",
+        `O valor foi salvo em ${selectedCard?.name || "seu cartão"} como ajuste inicial da fatura.`,
+        "success"
+      );
+    } catch (error) {
+      showToast(
+        "Erro ao lançar ajuste",
+        error instanceof Error ? error.message : "Tente novamente.",
+        "error"
+      );
+    } finally {
+      setInitialBalanceSubmitting(false);
+    }
+  }
+
+  function handleGoToInitialBalanceSection() {
+    const section = document.getElementById("initial-balance-card-adjustment");
+
+    if (!section) {
+      showToast(
+        "Área de ajuste não encontrada",
+        "Role a tela um pouco para baixo e procure por 'Ajuste inicial do cartão'.",
+        "info"
+      );
+      return;
+    }
+
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function handleResetAllData() {
@@ -821,17 +973,21 @@ export default function DashboardPage() {
     });
   }, [transactions, selectedMonth]);
 
-  const filteredExpenses = useMemo(() => {
-    return filteredTransactions.filter((transaction) =>
-      isExpenseType(transaction.type)
-    );
+  const analyticalTransactions = useMemo(() => {
+    return filteredTransactions.filter((transaction) => !isAdjustmentTransaction(transaction));
   }, [filteredTransactions]);
 
+  const filteredExpenses = useMemo(() => {
+    return analyticalTransactions.filter((transaction) =>
+      isExpenseType(transaction.type)
+    );
+  }, [analyticalTransactions]);
+
   const filteredIncomes = useMemo(() => {
-    return filteredTransactions.filter((transaction) =>
+    return analyticalTransactions.filter((transaction) =>
       isIncomeType(transaction.type)
     );
-  }, [filteredTransactions]);
+  }, [analyticalTransactions]);
 
   const totalExpenses = useMemo(() => {
     return filteredExpenses.reduce(
@@ -1216,7 +1372,7 @@ export default function DashboardPage() {
         const isFuture = transactionDate.getTime() > baseDate.getTime();
         const isExpense = isExpenseType(transaction.type);
 
-        return isInstallment && isFuture && isExpense;
+        return isInstallment && isFuture && isExpense && !isAdjustmentTransaction(transaction);
       })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }, [transactions, selectedMonth]);
@@ -1596,7 +1752,7 @@ export default function DashboardPage() {
     const map: Record<string, number> = {};
 
     transactions.forEach((transaction) => {
-      if (!isExpenseType(transaction.type)) return;
+      if (!isExpenseType(transaction.type) || isAdjustmentTransaction(transaction)) return;
 
       const category =
         transaction.category && transaction.category.trim() !== ""
@@ -2567,7 +2723,7 @@ export default function DashboardPage() {
     const todayTransactions = isCurrentSelectedMonth
       ? filteredTransactions.filter((transaction) => {
           const transactionDate = new Date(transaction.date);
-          return transactionDate.getDate() === now.getDate();
+          return transactionDate.getDate() === now.getDate() && !isAdjustmentTransaction(transaction);
         })
       : [];
 
@@ -2657,13 +2813,13 @@ export default function DashboardPage() {
     endPreviousWeek.setMilliseconds(-1);
 
     const currentWeekExpenses = transactions.filter((transaction) => {
-      if (!isExpenseType(transaction.type)) return false;
+      if (!isExpenseType(transaction.type) || isAdjustmentTransaction(transaction)) return false;
       const date = new Date(transaction.date);
       return date >= startCurrentWeek && date <= now;
     });
 
     const previousWeekExpenses = transactions.filter((transaction) => {
-      if (!isExpenseType(transaction.type)) return false;
+      if (!isExpenseType(transaction.type) || isAdjustmentTransaction(transaction)) return false;
       const date = new Date(transaction.date);
       return date >= startPreviousWeek && date <= endPreviousWeek;
     });
@@ -2848,18 +3004,19 @@ const dataHealthSummary = useMemo(() => {
     const orphanCreditCardTransactionsCount = filteredTransactions.filter((transaction) => {
       return (
         isExpenseType(transaction.type) &&
+        !isAdjustmentTransaction(transaction) &&
         normalizeComparableText(transaction.paymentMethod) === "credit_card" &&
         (!transaction.cardId || !transaction.invoiceId)
       );
     }).length;
 
     const installmentWithoutGroupCount = transactions.filter((transaction) => {
-      return isInstallmentTransaction(transaction) && !transaction.purchaseGroupId;
+      return isInstallmentTransaction(transaction) && !isAdjustmentTransaction(transaction) && !transaction.purchaseGroupId;
     }).length;
 
     const duplicateInstallmentByGroupCount = Object.values(
       transactions
-        .filter((transaction) => isInstallmentTransaction(transaction) && transaction.purchaseGroupId)
+        .filter((transaction) => isInstallmentTransaction(transaction) && !isAdjustmentTransaction(transaction) && transaction.purchaseGroupId)
         .reduce<Record<string, number>>((acc, transaction) => {
           const installmentInfo = extractInstallmentInfo(transaction.title);
           const installmentNumber =
@@ -3826,6 +3983,317 @@ const dataHealthSummary = useMemo(() => {
     );
   }
 
+
+  const monthClaritySummary = useMemo(() => {
+    if (projectedBalanceReal < 0) {
+      return {
+        tone: "danger" as const,
+        title: "Mês em risco",
+        summary: `A projeção está negativa em ${formatCurrency(Math.abs(projectedBalanceReal))}.`,
+      };
+    }
+
+    if (spendingCapacitySummary.extraSafeSpend <= 0) {
+      return {
+        tone: "danger" as const,
+        title: "Sem folga para gastar",
+        summary: "Qualquer gasto novo pode apertar seu mês.",
+      };
+    }
+
+    if (spendingCapacitySummary.extraSafeSpend < 300 || openInvoicesTotal > currentAccountsBalance) {
+      return {
+        tone: "warning" as const,
+        title: "Mês apertado",
+        summary: `Sua margem segura no mês está em ${formatCurrency(spendingCapacitySummary.extraSafeSpend)}.`,
+      };
+    }
+
+    if (balanceMonth < 0) {
+      return {
+        tone: "warning" as const,
+        title: "Resultado do mês negativo",
+        summary: `O mês está fechando em ${formatCurrency(balanceMonth)} até agora.`,
+      };
+    }
+
+    return {
+      tone: "success" as const,
+      title: "Mês sob controle",
+      summary: `Você ainda tem ${formatCurrency(spendingCapacitySummary.extraSafeSpend)} de margem segura neste mês.`,
+    };
+  }, [
+    balanceMonth,
+    currentAccountsBalance,
+    openInvoicesTotal,
+    projectedBalanceReal,
+    spendingCapacitySummary.extraSafeSpend,
+  ]);
+
+  const topCategoriesOutOfPace = useMemo(() => {
+    return goalPaceSummary
+      .filter((item) => item.goal > 0)
+      .filter(
+        (item) => item.paceStatus === "off_track" || item.paceStatus === "attention"
+      )
+      .sort(
+        (a, b) =>
+          Math.abs(Number(b.paceDifference || 0)) -
+          Math.abs(Number(a.paceDifference || 0))
+      )
+      .slice(0, 3)
+      .map((item) => {
+        const paceDifference = Math.abs(Number(item.paceDifference || 0));
+        const adjustedPercentage = Number(item.adjustedPercentage || 0);
+
+        return {
+          ...item,
+          paceDifference,
+          adjustedPercentage,
+          shortLabel: getCategoryLabel(item.category),
+          shortStatus: getPaceStatusLabel(item.paceStatus),
+          actionHint: getImmediateCategoryAction(item.category),
+          recoveryHint: getPaceRecoveryHint(
+            paceDifference,
+            spendingCapacitySummary.daysRemaining,
+            spendingCapacitySummary.isCurrentSelectedMonth
+          ),
+        };
+      });
+  }, [
+    goalPaceSummary,
+    spendingCapacitySummary.daysRemaining,
+    spendingCapacitySummary.isCurrentSelectedMonth,
+  ]);
+
+  const supportingCategoriesOutOfPace = useMemo(() => {
+    return topCategoriesOutOfPace.slice(1, 3);
+  }, [topCategoriesOutOfPace]);
+
+  const assistantSummary = useMemo(() => {
+    const now = new Date();
+    const selectedMonthStart = new Date(
+      selectedMonthMeta.year,
+      selectedMonthMeta.month - 1,
+      1
+    );
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthDifference =
+      (selectedMonthStart.getFullYear() - currentMonthStart.getFullYear()) * 12 +
+      (selectedMonthStart.getMonth() - currentMonthStart.getMonth());
+
+    const isCurrentSelectedMonth = monthDifference === 0;
+    const isPastSelectedMonth = monthDifference < 0;
+    const isFutureSelectedMonth = monthDifference > 0;
+
+    const todayKey = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    const todayTransactions = isCurrentSelectedMonth
+      ? filteredTransactions.filter(
+          (transaction) =>
+            transaction.date?.slice(0, 10) === todayKey &&
+            !isAdjustmentTransaction(transaction)
+        )
+      : [];
+
+    const spentToday = todayTransactions
+      .filter((transaction) => isExpenseType(transaction.type))
+      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+
+    const hasTransactionsToday = todayTransactions.length > 0;
+    const hasNoBalance = currentAccountsBalance <= 0;
+    const hasOpenInvoice = openInvoicesTotal > 0;
+    const mainCategory = topCategoriesOutOfPace[0] || null;
+
+    const focusLabel =
+      isCurrentSelectedMonth && (monthClaritySummary.tone === "danger" || monthClaritySummary.tone === "warning")
+        ? "Compromisso de hoje"
+        : isCurrentSelectedMonth
+        ? "Foco principal de hoje"
+        : "Foco principal deste mês";
+
+    const dailyLimitText =
+      spendingCapacitySummary.safeDailySpend <= 0
+        ? isCurrentSelectedMonth
+          ? "Hoje, o ideal é não criar nenhum gasto novo."
+          : "Neste cenário, o ideal é não abrir novos gastos variáveis."
+        : isCurrentSelectedMonth
+        ? `Você pode gastar até ${formatCurrency(
+            spendingCapacitySummary.safeDailySpend
+          )} hoje sem comprometer o mês.`
+        : `Seu limite diário médio neste mês está em ${formatCurrency(
+            spendingCapacitySummary.safeDailySpend
+          )}.`;
+
+    const dailyLimitSupport =
+      spendingCapacitySummary.safeDailySpend <= 0
+        ? "Seu mês está sem margem de segurança neste momento."
+        : spendingCapacitySummary.isNegativeScenario
+        ? "Mesmo com esse limite, siga com bastante cautela."
+        : isFutureSelectedMonth
+        ? `Essa leitura mostra a margem estimada para ${formatMonthYear(selectedDate)}.`
+        : `Isso considera sua menor projeção até ${formatMonthYear(selectedDate)}.`;
+
+    const quickContext = [
+      openInvoicesTotal > 0 ? `${formatCurrency(openInvoicesTotal)} em faturas abertas` : null,
+      isCurrentSelectedMonth && spentToday > 0 ? `${formatCurrency(spentToday)} gasto hoje` : null,
+      mainCategory
+        ? `${mainCategory.category} acima do ritmo em ${formatCurrency(mainCategory.paceDifference)}`
+        : null,
+      !isCurrentSelectedMonth && balanceMonth !== 0
+        ? `Resultado parcial do mês em ${formatCurrency(balanceMonth)}`
+        : null,
+    ].filter(Boolean) as string[];
+
+    if (isCurrentSelectedMonth && spentToday > 0 && hasNoBalance && hasOpenInvoice) {
+      return {
+        tone: "danger" as const,
+        status: "Atenção máxima",
+        alert: `Você já gastou ${formatCurrency(
+          spentToday
+        )} hoje, está sem saldo em conta e ainda tem faturas em aberto.`,
+        focusLabel,
+        action: "Evite usar o cartão hoje",
+        actionDetail: "Priorize só o essencial até recuperar margem.",
+        actionReason: "Essa é a ação com maior impacto imediato no seu caixa.",
+        actionImpact: "Um dia mais contido já reduz a chance de empurrar mais pressão para a próxima fatura.",
+        dailyLimit: dailyLimitText,
+        dailyLimitSupport,
+        secondaryAlert: quickContext[0] || null,
+      };
+    }
+
+    if (isCurrentSelectedMonth && !hasTransactionsToday) {
+      return {
+        tone: "warning" as const,
+        status: "Dia sem registros",
+        alert: "Você ainda não registrou nada hoje.",
+        focusLabel,
+        action: "Lance o que entrou e saiu antes de decidir novos gastos",
+        actionDetail: "Sem o dia registrado, o assistente perde precisão.",
+        actionReason: "Hoje, clareza vem antes de qualquer outra decisão.",
+        actionImpact: "Quando o dia está atualizado, o limite e a prioridade do assistente ficam mais confiáveis.",
+        dailyLimit: dailyLimitText,
+        dailyLimitSupport,
+        secondaryAlert: quickContext[0] || null,
+      };
+    }
+
+    if (monthClaritySummary.tone === "danger") {
+      return {
+        tone: "danger" as const,
+        status: monthClaritySummary.title,
+        alert: mainCategory
+          ? `Você já está ${formatCurrency(mainCategory.paceDifference)} acima do ritmo em ${mainCategory.category}.`
+          : monthClaritySummary.summary,
+        focusLabel,
+        action: mainCategory
+          ? mainCategory.actionHint
+          : isCurrentSelectedMonth
+          ? "Segure gastos variáveis hoje"
+          : "Reduza gastos variáveis neste mês",
+        actionDetail: mainCategory
+          ? mainCategory.recoveryHint
+          : "O foco agora é preservar caixa até o mês ganhar folga.",
+        actionReason: mainCategory
+          ? "Essa categoria é a que mais aumenta a pressão do mês agora."
+          : "Seu mês precisa de proteção imediata antes de qualquer outro movimento.",
+        actionImpact: mainCategory
+          ? `Se você segurar ${mainCategory.category.toLowerCase()} agora, a pressão do mês começa a ceder mais rápido.`
+          : "Menos gasto variável agora significa mais margem para atravessar o mês sem apertar ainda mais o caixa.",
+        dailyLimit: dailyLimitText,
+        dailyLimitSupport,
+        secondaryAlert: quickContext[0] || null,
+      };
+    }
+
+    if (mainCategory) {
+      const isOffTrack = mainCategory.paceStatus === "off_track";
+
+      return {
+        tone: isOffTrack ? ("warning" as const) : ("info" as const),
+        status: isOffTrack ? "Categoria acelerou" : "Categoria pedindo atenção",
+        alert: `Você já está ${formatCurrency(
+          mainCategory.paceDifference
+        )} acima do ritmo em ${mainCategory.category} neste mês.`,
+        focusLabel,
+        action: mainCategory.actionHint,
+        actionDetail: mainCategory.recoveryHint,
+        actionReason: "Focar só nessa frente agora já melhora seu mês sem espalhar atenção.",
+        actionImpact: `Controlar ${mainCategory.category.toLowerCase()} primeiro tende a devolver margem mais rápido do que tentar mexer em várias frentes ao mesmo tempo.`,
+        dailyLimit: dailyLimitText,
+        dailyLimitSupport,
+        secondaryAlert: quickContext[0] || null,
+      };
+    }
+
+    if (monthClaritySummary.tone === "warning") {
+      return {
+        tone: "warning" as const,
+        status: monthClaritySummary.title,
+        alert: monthClaritySummary.summary,
+        focusLabel,
+        action: isCurrentSelectedMonth ? "Evite compras por impulso hoje" : "Reduza compras por impulso neste mês",
+        actionDetail: "Seu mês ainda está controlado, mas com menos folga do que parece.",
+        actionReason: "Um ajuste simples agora já ajuda a devolver margem para o restante do mês.",
+        actionImpact: "Você não precisa cortar tudo; precisa só evitar o que não move sua vida financeira para frente.",
+        dailyLimit: dailyLimitText,
+        dailyLimitSupport,
+        secondaryAlert: quickContext[0] || null,
+      };
+    }
+
+    if (isPastSelectedMonth) {
+      return {
+        tone: "success" as const,
+        status: "Mês encerrado",
+        alert: "Use essa leitura para entender padrões e ajustar o próximo mês com mais precisão.",
+        focusLabel: "Principal aprendizado",
+        action: "Observe o que mais pressionou seu resultado",
+        actionDetail: mainCategory
+          ? `${mainCategory.category} foi a categoria que mais saiu do ritmo neste período.`
+          : "Seu fechamento está estável e pode servir de referência para os próximos meses.",
+        actionReason: "Quando você aprende com o mês fechado, decide melhor antes do problema aparecer de novo.",
+        actionImpact: "Esse fechamento vira base para metas mais realistas e alertas mais úteis daqui para frente.",
+        dailyLimit: dailyLimitText,
+        dailyLimitSupport,
+        secondaryAlert: quickContext[0] || null,
+      };
+    }
+
+    return {
+      tone: "success" as const,
+      status: monthClaritySummary.title,
+      alert: monthClaritySummary.summary,
+      focusLabel,
+      action: isFutureSelectedMonth ? "Mantenha essa estrutura ao longo do mês" : "Mantenha o ritmo atual",
+      actionDetail: isFutureSelectedMonth
+        ? "A projeção está saudável. O objetivo agora é proteger essa margem quando o mês começar."
+        : "Seu cenário está saudável. O melhor movimento agora é constância.",
+      actionReason: "Quando o mês já está sob controle, não vale criar regra nova sem necessidade.",
+      actionImpact: "A melhor forma de manter folga é repetir o que já está funcionando, sem relaxar nos detalhes.",
+      dailyLimit: dailyLimitText,
+      dailyLimitSupport,
+      secondaryAlert: quickContext[0] || null,
+    };
+  }, [
+    balanceMonth,
+    currentAccountsBalance,
+    filteredTransactions,
+    monthClaritySummary,
+    openInvoicesTotal,
+    selectedDate,
+    selectedMonthMeta.month,
+    selectedMonthMeta.year,
+    spendingCapacitySummary.isNegativeScenario,
+    spendingCapacitySummary.safeDailySpend,
+    topCategoriesOutOfPace,
+  ]);
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 p-2 sm:p-3 md:p-8">
       {toast.visible ? (
@@ -3844,17 +4312,17 @@ const dataHealthSummary = useMemo(() => {
               </div>
 
               <button
-  type="button"
-  onClick={() => {
-    setToast((current) => ({
-      ...current,
-      visible: false,
-    }));
-  }}
-  className={`rounded-lg px-2 py-1 text-sm font-semibold transition ${getToastStyles(toast.tone).button}`}
->
-  Fechar
-</button>
+                type="button"
+                onClick={() => {
+                  setToast((current) => ({
+                    ...current,
+                    visible: false,
+                  }));
+                }}
+                className={`rounded-lg px-2 py-1 text-sm font-semibold transition ${getToastStyles(toast.tone).button}`}
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>
@@ -3891,2877 +4359,228 @@ const dataHealthSummary = useMemo(() => {
         </div>
       ) : null}
 
-      <div className="mx-auto max-w-7xl space-y-4 md:space-y-7">
-        <header className="flex flex-col gap-4 rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm font-medium text-slate-500">Dashboard</p>
-              <h1 className="text-2xl leading-tight font-bold text-slate-900 md:text-3xl">
-                Visão geral financeira
+      <div className="mx-auto max-w-3xl space-y-4 md:space-y-6">
+        <header className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <p className="text-sm font-medium text-slate-500">Início</p>
+              <h1 className="mt-1 text-2xl leading-tight font-bold text-slate-900 md:text-3xl">
+                Sua organização financeira, sem excesso
               </h1>
-              <p className="mt-1 text-sm text-slate-500">
-                Resumo de {formatMonthYear(selectedDate)}
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Veja seu momento, entenda a próxima ação e entre nos detalhes só quando precisar.
               </p>
             </div>
 
-<div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-3">
-  <Link
-    href="/transactions"
-    className="rounded-[18px] bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:opacity-95 active:translate-y-0"
-  >
-    Ver transações
-  </Link>
-
-  <Link
-    href="/accounts"
-    className="rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md active:translate-y-0"
-  >
-    Ver contas
-  </Link>
-
-  <Link
-    href="/invoices"
-    className="rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md active:translate-y-0"
-  >
-    Ver faturas
-  </Link>
-
-  <button
-    type="button"
-    onClick={handleResetAllData}
-    disabled={resettingData}
-    className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3.5 text-sm font-semibold text-rose-700 transition duration-200 hover:-translate-y-0.5 hover:bg-rose-100 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
-  >
-    {resettingData ? "Resetando..." : "Resetar dados"}
-  </button>
-
-  <LogoutButton />
-</div>
-
-          <div className="flex flex-col gap-2 w-full sm:max-w-xs">
-            <label className="text-sm font-medium text-slate-700">
-              Filtrar por mês
-            </label>
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-            />
-          </div>
-        </div>
-      </header>
-
-        <section className="grid grid-cols-1 gap-4 2xl:grid-cols-[1.2fr,0.8fr]">
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">Modo de uso diário</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  O que olhar primeiro para usar o app no dia a dia sem complicar.
-                </p>
-              </div>
-
-              <div className="inline-flex w-fit rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-600 md:text-xs">
-                {dailyUsageSummary.isCurrentSelectedMonth ? "mês atual" : "mês consultado"}
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo seguro do mês</p>
-                <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                  {formatCurrency(dailyUsageSummary.safeToSpendMonth)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">Sem forçar sua projeção futura.</p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Limite seguro por dia</p>
-                <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                  {formatCurrency(dailyUsageSummary.safeToSpendToday)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">Para atravessar o mês com mais folga.</p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saiu hoje</p>
-                <p className="mt-2 text-xl font-bold text-rose-600">
-                  {formatCurrency(dailyUsageSummary.todayExpenses)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">Somente no dia de hoje.</p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Entrou hoje</p>
-                <p className="mt-2 text-xl font-bold text-emerald-600">
-                  {formatCurrency(dailyUsageSummary.todayIncomes)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">Somente no dia de hoje.</p>
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-900">Próximas decisões</p>
-                <div className="mt-3 space-y-3">
-                  {dailyUsageSummary.visibleAlerts.length > 0 ? (
-                    dailyUsageSummary.visibleAlerts.map((alert) => (
-                      <div key={`daily-alert-${alert.id}`} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                        <p className="text-sm font-semibold text-slate-900">{alert.title}</p>
-                        <p className="mt-1 text-xs leading-5 text-slate-500">{alert.action}</p>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-slate-500">Sem decisões urgentes agora.</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-900">Próximos compromissos</p>
-                <div className="mt-3 space-y-3">
-                  {dailyUsageSummary.upcomingRecurring.length > 0 ? (
-                    dailyUsageSummary.upcomingRecurring.map((item) => (
-                      <div key={`daily-recurring-${item.id}`} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                            <p className="mt-1 text-xs text-slate-500">Dia {item.day} · {item.kind === "income" ? "entrada" : "saída"}</p>
-                          </div>
-                          <p className={`text-sm font-bold ${item.kind === "income" ? "text-emerald-600" : "text-rose-600"}`}>
-                            {formatCurrency(item.amount)}
-                          </p>
-                        </div>
-                      </div>
-                    ))
-                  ) : dailyUsageSummary.upcomingInvoices.length > 0 ? (
-                    dailyUsageSummary.upcomingInvoices.map((invoice) => (
-                      <div key={`daily-invoice-${invoice.id}`} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{invoice.cardName}</p>
-                            <p className="mt-1 text-xs text-slate-500">Fatura de {invoice.label}</p>
-                          </div>
-                          <p className="text-sm font-bold text-slate-900">{formatCurrency(invoice.total)}</p>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-slate-500">Sem compromissos próximos relevantes.</p>
-                  )}
-                </div>
-              </div>
+            <div className="flex w-full flex-col gap-3 lg:max-w-xs">
+              <label className="text-sm font-medium text-slate-700">
+                Filtrar por mês
+              </label>
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+              />
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">Fechamento diário</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Uma rotina curta para revisar o dia e manter o app confiável no uso real.
-                </p>
-              </div>
-
-              <div className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold tracking-wide ${
-                dailyReviewSummary.currentEntry.completed
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-amber-100 text-amber-700"
-              }`}>
-                {dailyReviewSummary.currentEntry.completed ? "dia revisado" : "revisão pendente"}
-              </div>
+          <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo hoje</p>
+              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Dia em revisão</p>
-                <p className="mt-2 text-lg font-bold text-slate-900">{dailyReviewSummary.reviewLabel}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {dailyReviewSummary.isCurrentSelectedMonth ? "Fechamento do dia atual." : "Você está revisando o mês consultado."}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Checklist concluído</p>
-                <p className="mt-2 text-lg font-bold text-slate-900">
-                  {dailyReviewSummary.checkedCount}/{dailyReviewSummary.totalItems}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {dailyReviewSummary.pendingCount > 0
-                    ? `${dailyReviewSummary.pendingCount} item(ns) ainda pendentes.`
-                    : "Tudo certo no checklist de hoje."}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Dias revisados no mês</p>
-                <p className="mt-2 text-lg font-bold text-slate-900">{dailyReviewSummary.completedDays}</p>
-                <p className="mt-1 text-xs text-slate-500">Crie consistência no uso diário do app.</p>
-              </div>
+            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado do mês</p>
+              <p className={`mt-2 text-xl font-bold md:text-2xl ${balanceMonth >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatCurrency(balanceMonth)}</p>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr,0.9fr]">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-900">Checklist de revisão</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Foque primeiro em: <span className="font-semibold text-slate-700">{dailyReviewSummary.suggestedFocus}</span>
-                </p>
+            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
+              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(openInvoicesTotal)}</p>
+            </div>
 
-                <div className="mt-4 space-y-3">
-                  {[
-                    ["transactions", "Lancei o que entrou ou saiu hoje."],
-                    ["alerts", "Revisei os alertas e prioridades do momento."],
-                    ["commitments", "Chequei próximos compromissos e cobranças."],
-                    ["balance", "Confirmei se o saldo ainda faz sentido hoje."],
-                  ].map(([key, label]) => {
-                    const typedKey = key as keyof DailyReviewChecklist;
-                    const checked = dailyReviewSummary.currentEntry.checklist[typedKey];
-
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => toggleDailyReviewItem(dailyReviewSummary.dateKey, typedKey)}
-                        className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
-                          checked
-                            ? "border-emerald-200 bg-emerald-50"
-                            : "border-slate-200 bg-white hover:border-slate-300"
-                        }`}
-                      >
-                        <div className="pr-3">
-                          <p className="text-sm font-semibold text-slate-900">{label}</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {checked ? "Marcado como revisado." : "Toque para marcar este item."}
-                          </p>
-                        </div>
-                        <div className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${
-                          checked ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500"
-                        }`}>
-                          {checked ? "✓" : "•"}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-3">
-                  <button
-                    type="button"
-                    onClick={() => markDailyReviewComplete(dailyReviewSummary.dateKey)}
-                    className="rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800"
-                  >
-                    Marcar dia como revisado
-                  </button>
-
-                  {dailyReviewSummary.currentEntry.completed ? (
-                    <button
-                      type="button"
-                      onClick={() => reopenDailyReview(dailyReviewSummary.dateKey)}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                    >
-                      Reabrir revisão
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-900">Histórico rápido</p>
-                <div className="mt-4 space-y-3">
-                  {dailyReviewSummary.recentCompletedDays.length > 0 ? (
-                    dailyReviewSummary.recentCompletedDays.map((item) => (
-                      <div
-                        key={`daily-review-${item.dateKey}`}
-                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{item.label}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {Object.values(item.checklist).filter(Boolean).length}/4 itens concluídos
-                            </p>
-                          </div>
-                          <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                            revisado
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
-                      Ainda não há dias revisados neste mês. Comece pelo fechamento de hoje.
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4">
-                  <p className="text-sm font-semibold text-amber-900">Ritual de fechamento</p>
-                  <ol className="mt-2 space-y-2 text-sm text-amber-800">
-                    <li>1. Lance o que entrou ou saiu hoje.</li>
-                    <li>2. Veja as prioridades e próximas cobranças.</li>
-                    <li>3. Marque o dia como revisado para manter o histórico.</li>
-                  </ol>
-                </div>
-              </div>
+            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gasto seguro</p>
+              <p className={`mt-2 text-xl font-bold md:text-2xl ${spendingCapacitySummary.extraSafeSpend > 0 ? "text-sky-700" : "text-rose-600"}`}>{formatCurrency(spendingCapacitySummary.extraSafeSpend)}</p>
             </div>
           </div>
+        </header>
 
-
-        <section className="mt-6 rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-slate-900">Revisão semanal inteligente</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Um fechamento rápido da semana para corrigir a rota antes que o mês aperte.
-              </p>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Assistente financeiro</p>
+              <h2 className="mt-1 text-lg font-bold text-slate-900">Leitura simples do mês</h2>
             </div>
-
             <span
-              className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold tracking-wide ${
-                weeklyReviewSummary.status === "fora do plano"
+              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                monthClaritySummary.tone === "danger"
                   ? "bg-rose-100 text-rose-700"
-                  : weeklyReviewSummary.status === "atenção"
+                  : monthClaritySummary.tone === "warning"
                   ? "bg-amber-100 text-amber-700"
                   : "bg-emerald-100 text-emerald-700"
               }`}
             >
-              {weeklyReviewSummary.status === "fora do plano"
-                ? "fora do plano"
-                : weeklyReviewSummary.status === "atenção"
-                ? "atenção"
-                : "controlada"}
+              {monthClaritySummary.title}
             </span>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gastou na semana</p>
-              <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                {formatCurrency(weeklyReviewSummary.currentWeekTotal)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {weeklyReviewSummary.transactionsCount} lançamento(s) de saída nos últimos 7 dias.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Categoria que mais pesou</p>
-              <p className="mt-2 text-lg font-bold text-slate-900">
-                {weeklyReviewSummary.topCategory
-                  ? getCategoryLabel(weeklyReviewSummary.topCategory.category)
-                  : "Sem destaque"}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {weeklyReviewSummary.topCategory
-                  ? formatCurrency(weeklyReviewSummary.topCategory.total)
-                  : "Sem gastos relevantes na semana."}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Vs. semana anterior</p>
-              <p
-                className={`mt-2 text-xl font-bold ${
-                  weeklyReviewSummary.variationFromPreviousWeek > 0
-                    ? "text-rose-600"
-                    : weeklyReviewSummary.variationFromPreviousWeek < 0
-                    ? "text-emerald-600"
-                    : "text-slate-900"
-                }`}
-              >
-                {weeklyReviewSummary.variationFromPreviousWeek > 0 ? "+" : ""}
-                {formatCurrency(weeklyReviewSummary.variationFromPreviousWeek)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Comparação com os 7 dias anteriores.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Metas em risco</p>
-              <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                {weeklyReviewSummary.topGoalsAtRisk.length}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Categorias fora do ritmo ou pedindo atenção.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr,0.9fr]">
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-              <p className="text-sm font-semibold text-slate-900">Decisão recomendada para a próxima semana</p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                {weeklyReviewSummary.recommendation}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-              <p className="text-sm font-semibold text-slate-900">Metas fora do ritmo</p>
-
-              <div className="mt-3 space-y-3">
-                {weeklyReviewSummary.topGoalsAtRisk.length > 0 ? (
-                  weeklyReviewSummary.topGoalsAtRisk.map((item) => (
-                    <div
-                      key={`weekly-goal-${item.category}`}
-                      className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
-                    >
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">
-                          {getCategoryLabel(item.category)}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Diferença no ritmo: {formatCurrency(Math.abs(item.paceDifference))}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                          item.paceStatus === "off_track"
-                            ? "bg-rose-100 text-rose-700"
-                            : "bg-amber-100 text-amber-700"
-                        }`}
-                      >
-                        {item.paceStatus === "off_track" ? "agir já" : "acompanhar"}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                    Nenhuma meta relevante saiu do ritmo nesta semana.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <p className="text-sm font-semibold text-slate-900">Ações rápidas</p>
-            <p className="mt-1 text-sm text-slate-500">Atalhos para usar o app de verdade no dia a dia.</p>
-
-            <div className="mt-4 space-y-3">
-              <Link
-                href="/transactions"
-                className="flex items-center justify-between rounded-2xl bg-slate-900 px-4 py-4 text-sm font-semibold text-white transition hover:bg-slate-800"
-              >
-                <span>Lançar nova transação</span>
-                <span>→</span>
-              </Link>
-
-              <a
-                href="#central-alertas"
-                className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <span>Ver prioridades do dia</span>
-                <span>→</span>
-              </a>
-
-              <a
-                href="#leitura-futuro"
-                className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <span>Checar folga do mês</span>
-                <span>→</span>
-              </a>
-
-              <Link
-                href="/invoices"
-                className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <span>Revisar faturas</span>
-                <span>→</span>
-              </Link>
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4">
-              <p className="text-sm font-semibold text-amber-900">Ritual rápido de uso</p>
-              <div className="mt-2 space-y-2 text-sm text-amber-800">
-                <p>1. Lance o que entrou ou saiu hoje.</p>
-                <p>2. Veja as 3 prioridades do momento.</p>
-                <p>3. Confira se ainda está dentro do limite seguro do dia.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-slate-900">Saúde dos dados</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Diagnóstico rápido para confiar nos cálculos antes de decidir.
-              </p>
-            </div>
-
-            <div
-              className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold tracking-wide ${
-                dataHealthSummary.diagnosisTone === "danger"
-                  ? "bg-rose-100 text-rose-700"
-                  : dataHealthSummary.diagnosisTone === "warning"
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-emerald-100 text-emerald-700"
-              }`}
-            >
-              {dataHealthSummary.diagnosisTitle}
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1.2fr_0.8fr]">
-            <div
-              className={`rounded-2xl border px-4 py-4 ${
-                dataHealthSummary.diagnosisTone === "danger"
-                  ? "border-rose-200 bg-rose-50"
-                  : dataHealthSummary.diagnosisTone === "warning"
-                  ? "border-amber-200 bg-amber-50"
-                  : "border-emerald-200 bg-emerald-50"
-              }`}
-            >
-              <p className="text-sm font-semibold text-slate-900">{dataHealthSummary.diagnosisTitle}</p>
-              <p className="mt-1 text-sm text-slate-600">{dataHealthSummary.diagnosisMessage}</p>
-
-              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Críticos</p>
-                  <p className="mt-2 text-2xl font-bold text-slate-900">{dataHealthSummary.criticalIssues}</p>
-                </div>
-                <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Atenção</p>
-                  <p className="mt-2 text-2xl font-bold text-slate-900">{dataHealthSummary.warningIssues}</p>
-                </div>
-                <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
-                  <p className="mt-2 text-2xl font-bold text-slate-900">{openInvoices.length}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-              <p className="text-sm font-semibold text-slate-900">Resumo técnico do mês</p>
-              <div className="mt-3 grid grid-cols-1 gap-2 text-sm text-slate-600">
-                <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
-                  <span>Duplicidades aparentes</span>
-                  <span className="font-semibold text-slate-900">{dataHealthSummary.stats.duplicateTransactionsCount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
-                  <span>Parcelas duplicadas no grupo</span>
-                  <span className="font-semibold text-slate-900">{dataHealthSummary.stats.duplicateInstallmentByGroupCount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
-                  <span>Crédito sem vínculo</span>
-                  <span className="font-semibold text-slate-900">{dataHealthSummary.stats.orphanCreditCardTransactionsCount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
-                  <span>Fatura paga + aberta</span>
-                  <span className="font-semibold text-slate-900">{dataHealthSummary.stats.paidAndOpenInvoiceGroupsCount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
-                  <span>Parcelas sem grupo</span>
-                  <span className="font-semibold text-slate-900">{dataHealthSummary.stats.installmentWithoutGroupCount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
-                  <span>Recorrências com possível duplicidade</span>
-                  <span className="font-semibold text-slate-900">{dataHealthSummary.stats.recurringDuplicateMatchesCount}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {dataHealthSummary.checks.map((check) => (
-              <div
-                key={check.id}
-                className={`rounded-2xl border px-4 py-4 ${
-                  check.tone === "danger"
-                    ? "border-rose-200 bg-rose-50"
-                    : check.tone === "warning"
-                    ? "border-amber-200 bg-amber-50"
-                    : "border-emerald-200 bg-emerald-50"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">{check.label}</p>
-                    <p className="mt-1 text-sm text-slate-700">{check.value}</p>
-                  </div>
-                  <span
-                    className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                      check.tone === "danger"
-                        ? "bg-rose-100 text-rose-700"
-                        : check.tone === "warning"
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-emerald-100 text-emerald-700"
-                    }`}
-                  >
-                    {check.tone === "danger" ? "revisar" : check.tone === "warning" ? "atenção" : "ok"}
-                  </span>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-slate-500">{check.help}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <p className="text-sm font-medium text-slate-500">
-              Saldo atual das contas
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">
-              {formatCurrency(currentAccountsBalance)}
-            </h2>
-          </div>
-
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <p className="text-sm font-medium text-slate-500">
-              Total de entradas do mês
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-emerald-600">
-              {formatCurrency(totalIncomes)}
-            </h2>
-          </div>
-
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <p className="text-sm font-medium text-slate-500">
-              Total de saídas do mês
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-rose-600">
-              {formatCurrency(totalExpenses)}
-            </h2>
-          </div>
-
-          <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <p className="text-sm font-medium text-slate-500">
-              Resultado do mês
-            </p>
-            <h2
-              className={`mt-2 text-2xl font-bold ${
-                balanceMonth >= 0 ? "text-sky-600" : "text-rose-600"
-              }`}
-            >
-              {formatCurrency(balanceMonth)}
-            </h2>
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-[28px] border border-sky-200/70 bg-sky-50 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-6">
-            <p className="text-sm font-medium text-sky-700">
-              Entradas fixas do mês
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-sky-800">
-              {formatCurrency(fixedIncomesTotal)}
-            </h2>
-          </div>
-
-          <div className="rounded-[28px] border border-slate-200/70 bg-slate-50 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-6">
-            <p className="text-sm font-medium text-slate-600">
-              Entradas variáveis do mês
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">
-              {formatCurrency(variableIncomesTotal)}
-            </h2>
-          </div>
-
-          <div className="rounded-[28px] border border-rose-200/70 bg-rose-50 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-6">
-            <p className="text-sm font-medium text-rose-700">
-              Saídas fixas do mês
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-rose-800">
-              {formatCurrency(fixedExpensesTotal)}
-            </h2>
-          </div>
-
-          <div className="rounded-[28px] border border-amber-200/70 bg-amber-50 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-6">
-            <p className="text-sm font-medium text-amber-700">
-              Saídas variáveis do mês
-            </p>
-            <h2 className="mt-2 text-2xl font-bold text-amber-800">
-              {formatCurrency(variableExpensesTotal)}
-            </h2>
-          </div>
-        </section>
-
-        <section id="leitura-futuro" className="rounded-[28px] border border-slate-200/70 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-          <p className="text-sm font-semibold text-slate-900">
-            Leitura rápida do futuro
-          </p>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            {futureBalanceAlert}
-          </p>
-
-          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Recorrências fixas pendentes
-              </p>
-              <p className="mt-1 text-lg font-bold text-slate-900">
-                {formatCurrency(monthlyRecurringProjection.fixedExpensesTotal)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {monthlyRecurringProjection.fixedPendingExpenseItems.length} saída(s) fixa(s) ainda não lançada(s)
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Recorrências variáveis pendentes
-              </p>
-              <p className="mt-1 text-lg font-bold text-slate-900">
-                {formatCurrency(monthlyRecurringProjection.variableExpensesTotal)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {monthlyRecurringProjection.variablePendingExpenseItems.length} saída(s) variável(is) ainda não lançada(s)
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Entradas fixas pendentes
-              </p>
-              <p className="mt-1 text-lg font-bold text-emerald-700">
-                {formatCurrency(monthlyRecurringProjection.fixedIncomesTotal)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {monthlyRecurringProjection.fixedPendingIncomeItems.length} entrada(s) fixa(s) ainda não lançada(s)
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Entradas variáveis pendentes
-              </p>
-              <p className="mt-1 text-lg font-bold text-emerald-700">
-                {formatCurrency(monthlyRecurringProjection.variableIncomesTotal)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {monthlyRecurringProjection.variablePendingIncomeItems.length} entrada(s) variável(is) ainda não lançada(s)
-              </p>
-            </div>
-          </div>
-        </section>
-
-
-
-        <section id="central-alertas" className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Central de alertas
-              </h3>
-              <p className="text-sm text-slate-400">
-                Prioridades do mês para você agir primeiro no que mais impacta sua vida financeira.
-              </p>
-            </div>
-
-            <div className="inline-flex w-fit rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-600 md:text-xs">
-              {visibleActionCenterAlerts.length} prioridade(s) ativas
-            </div>
-          </div>
-
-          {visibleActionCenterAlerts.length > 0 ? (
-            <div className="grid gap-3 lg:grid-cols-2">
-              {visibleActionCenterAlerts.map((alert) => {
-                const styles = getAlertStyles(alert.tone);
-
-                return (
-                  <div
-                    key={alert.id}
-                    className={`rounded-2xl border p-4 ${styles.container}`}
-                  >
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className={`font-semibold ${styles.title}`}>
-                            {alert.title}
-                          </p>
-                          <p className={`mt-1 text-sm leading-6 ${styles.text}`}>
-                            {alert.message}
-                          </p>
-                        </div>
-
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          <span
-                            className={`inline-flex rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide ${styles.badge}`}
-                          >
-                            {styles.label}
-                          </span>
-                          <span className="inline-flex rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-700">
-                            {alert.priorityLabel}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-white/60 bg-white/70 px-3 py-3">
-                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                          Próxima ação sugerida
-                        </p>
-                        <p className="mt-1 text-sm text-slate-700">
-                          {alert.action}
-                        </p>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleActionCenterAlertPrimaryAction(alert)}
-                          className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                        >
-                          Agir agora
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => markAlertResolved(alert.id)}
-                          className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50"
-                        >
-                          Resolver
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => remindAlertLater(alert.id)}
-                          className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                        >
-                          Lembrar depois
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => ignoreAlertThisMonth(alert.id)}
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                          Ignorar no mês
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-              Nenhum alerta ativo no momento.
-            </div>
-          )}
-
-          {handledActionCenterAlerts.length > 0 ? (
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Alertas tratados</p>
-                  <p className="text-xs text-slate-500">Resolvidos, adiados ou ignorados neste mês.</p>
-                </div>
-                <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-600">
-                  {handledActionCenterAlerts.length} tratado(s)
-                </span>
-              </div>
-
-              <div className="grid gap-3 lg:grid-cols-2">
-                {handledActionCenterAlerts.map((alert) => {
-                  const state = alertStates[alert.id];
-
-                  return (
-                    <div
-                      key={`handled-${alert.id}`}
-                      className="rounded-2xl border border-slate-200 bg-white p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900">{alert.title}</p>
-                          <p className="mt-1 text-sm leading-6 text-slate-600">{alert.message}</p>
-                        </div>
-                        <span className="inline-flex shrink-0 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-600">
-                          {getHandledAlertLabel(state)}
-                        </span>
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => reactivateAlert(alert.id)}
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                          Reativar alerta
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-        </section>
-
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4">
-            <h3 className="text-xl font-bold tracking-tight text-slate-900">
-              Análise inteligente
-            </h3>
-            <p className="text-sm text-slate-400">
-              Leitura automática da tendência do seu saldo para ajudar na tomada de decisão.
-            </p>
-          </div>
-
-          {financialInsight && (
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Tendência
-                </p>
-                <p
-                  className={`mt-2 text-2xl font-bold ${
-                    financialInsight.trend === "down"
-                      ? "text-rose-600"
-                      : financialInsight.trend === "up"
-                      ? "text-emerald-600"
-                      : "text-slate-900"
-                  }`}
-                >
-                  {financialInsight.trend === "down"
-                    ? "Queda"
-                    : financialInsight.trend === "up"
-                    ? "Crescimento"
-                    : "Estável"}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Direção geral observada na previsão mensal.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Variação em {monthlyForecast.length} meses
-                </p>
-                <p
-                  className={`mt-2 text-2xl font-bold ${
-                    financialInsight.diff < 0
-                      ? "text-rose-600"
-                      : financialInsight.diff > 0
-                      ? "text-emerald-600"
-                      : "text-slate-900"
-                  }`}
-                >
-                  {formatCurrency(financialInsight.diff)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Diferença entre o primeiro e o último mês projetado.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3.5 md:px-4 md:py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Ajuste sugerido por mês
-                </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {formatCurrency(financialInsight.monthlyAdjustment)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Valor aproximado para estabilizar sua trajetória, se a tendência continuar.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {financialInsight && (
-            <div
-              className={`mt-4 rounded-2xl border px-4 py-4 text-sm ${
-                financialInsight.trend === "down"
-                  ? "border-rose-200 bg-rose-50 text-rose-800"
-                  : financialInsight.trend === "up"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                  : "border-slate-200 bg-slate-50 text-slate-700"
-              }`}
-            >
-              {financialInsight.trend === "down" ? (
-                <div className="space-y-3">
-                  <p>
-                    ⚠️ Seu saldo está diminuindo ao longo dos próximos meses.
-                    Reduzir cerca de{" "}
-                    <span className="font-semibold">
-                      {formatCurrency(financialInsight.monthlyAdjustment)}
-                    </span>{" "}
-                    por mês pode ajudar a estabilizar sua vida financeira.
-                  </p>
-
-                  {categorySuggestion && (
-                    <div className="rounded-xl border border-rose-200 bg-white/70 px-4 py-3 text-sm">
-                      <p className="font-semibold text-slate-700">
-                        Sugestão de corte por categoria
-                      </p>
-                      <p className="mt-1 text-slate-600">
-                        Considere reduzir gastos em{" "}
-                        <span className="font-semibold">
-                          {categorySuggestion.categories
-                            .map((item) => item.category)
-                            .join(" e ")}
-                        </span>
-                        , que hoje são suas categorias com maior peso.
-                      </p>
-                      <p className="mt-2 text-slate-500">
-                        Exemplo prático: cortar cerca de{" "}
-                        <span className="font-semibold text-rose-700">
-                          {formatCurrency(categorySuggestion.suggestedCut)}
-                        </span>{" "}
-                        por mês nessas categorias já melhora sua projeção.
-                      </p>
-
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        {categorySuggestion.categories.map((item) => {
-                          const fivePercentCut = item.total * 0.05;
-                          const tenPercentCut = item.total * 0.1;
-                          const fifteenPercentCut = item.total * 0.15;
-                          const customValue = Number(
-                            (customCutInput[item.category] || "").replace(",", ".")
-                          );
-
-                          return (
-                            <div
-                              key={item.category}
-                              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3"
-                            >
-                              <p className="text-xs uppercase tracking-wide text-slate-500">
-                                {item.category}
-                              </p>
-                              <p className="text-sm font-semibold text-slate-900">
-                                {formatCurrency(item.total)}
-                              </p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                Reduzir 10% = {formatCurrency(tenPercentCut)}
-                              </p>
-
-                              <div className="mt-3 grid grid-cols-3 gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => runCutSimulation(item.category, fivePercentCut, 5)}
-                                  className="rounded-xl border border-sky-200 bg-sky-50 px-2 py-2 text-[11px] font-semibold text-sky-700 transition hover:bg-sky-100"
-                                >
-                                  Simular 5%
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => runCutSimulation(item.category, tenPercentCut, 10)}
-                                  className="rounded-xl border border-sky-200 bg-sky-50 px-2 py-2 text-[11px] font-semibold text-sky-700 transition hover:bg-sky-100"
-                                >
-                                  Simular 10%
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => runCutSimulation(item.category, fifteenPercentCut, 15)}
-                                  className="rounded-xl border border-sky-200 bg-sky-50 px-2 py-2 text-[11px] font-semibold text-sky-700 transition hover:bg-sky-100"
-                                >
-                                  Simular 15%
-                                </button>
-                              </div>
-
-                              <div className="mt-3 flex gap-2">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={customCutInput[item.category] || ""}
-                                  onChange={(e) =>
-                                    setCustomCutInput((prev) => ({
-                                      ...prev,
-                                      [item.category]: e.target.value,
-                                    }))
-                                  }
-                                  placeholder="Ex: 100"
-                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs outline-none transition focus:border-slate-400"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!Number.isNaN(customValue) && customValue > 0) {
-                                      runCutSimulation(item.category, Math.min(item.total, customValue), null);
-                                    }
-                                  }}
-                                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                                >
-                                  Simular valor
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {simulatedCutCategory && simulatedCutAmount > 0 && (
-                        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                              <p className="font-semibold text-emerald-900">
-                                Simulação ativa: reduzir {formatCurrency(simulatedCutAmount)} por mês em {simulatedCutCategory}
-                                {simulatedCutPercent ? ` (${simulatedCutPercent}%)` : ""}
-                              </p>
-                              <p className="mt-1 text-xs text-emerald-700">
-                                O app recalculou a trajetória futura com esse corte.
-                              </p>
-                            </div>
-
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={saveCurrentCutPlan}
-                                className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                              >
-                                Salvar como meta
-                              </button>
-                              <button
-                                type="button"
-                                onClick={clearCutSimulation}
-                                className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                              >
-                                Limpar simulação
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 grid gap-3 md:grid-cols-3">
-                            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-3">
-                              <p className="text-xs uppercase tracking-wide text-slate-500">
-                                Novo mês mais apertado
-                              </p>
-                              <p className="mt-1 text-lg font-bold text-slate-900">
-                                {simulatedForecastSummary.lowestMonth
-                                  ? formatCurrency(simulatedForecastSummary.lowestMonth.projectedBalance)
-                                  : formatCurrency(0)}
-                              </p>
-                              <p className="text-xs capitalize text-slate-500">
-                                {simulatedForecastSummary.lowestMonth?.label || "Sem previsão"}
-                              </p>
-                            </div>
-
-                            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-3">
-                              <p className="text-xs uppercase tracking-wide text-slate-500">
-                                Meses negativos após corte
-                              </p>
-                              <p className="mt-1 text-lg font-bold text-emerald-700">
-                                {simulatedForecastSummary.negativeMonths}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                {simulatedForecastSummary.negativeMonths === 0
-                                  ? "A simulação evita meses negativos."
-                                  : "Ainda existe risco em parte da janela prevista."}
-                              </p>
-                            </div>
-
-                            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-3">
-                              <p className="text-xs uppercase tracking-wide text-slate-500">
-                                Ganho no último mês
-                              </p>
-                              <p className="mt-1 text-lg font-bold text-emerald-700">
-                                {formatCurrency(
-                                  (simulatedMonthlyForecast[simulatedMonthlyForecast.length - 1]?.projectedBalance || 0) -
-                                    (monthlyForecast[monthlyForecast.length - 1]?.projectedBalance || 0)
-                                )}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                Melhora acumulada na ponta final da previsão.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {savedCutPlanSummary.entries.length > 0 && (
-                        <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                              <p className="font-semibold text-sky-900">
-                                Plano de economia do mês
-                              </p>
-                              <p className="mt-1 text-xs text-sky-700">
-                                Meta total de redução salva: {formatCurrency(savedCutPlanSummary.total)}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 grid gap-2 md:grid-cols-3">
-                            {savedCutPlanSummary.entries.map((entry) => (
-                              <div
-                                key={entry.category}
-                                className="rounded-xl border border-sky-200 bg-white px-3 py-3"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div>
-                                    <p className="text-xs uppercase tracking-wide text-slate-500">
-                                      {entry.category}
-                                    </p>
-                                    <p className="mt-1 text-sm font-semibold text-slate-900">
-                                      {formatCurrency(entry.amount)}
-                                    </p>
-                                  </div>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => removeSavedCutPlan(entry.category)}
-                                    className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50"
-                                  >
-                                    Remover
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : financialInsight.trend === "up" ? (
-                <p>
-                  ✅ Sua tendência está positiva. Mantendo esse ritmo, seu saldo
-                  tende a crescer nos próximos meses.
-                </p>
-              ) : (
-                <p>
-                  ℹ️ Sua projeção está relativamente estável. Continue acompanhando
-                  para evitar mudanças bruscas.
-                </p>
-              )}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Previsão dos próximos meses
-              </h3>
-              <p className="text-sm text-slate-400">
-                Saldo projetado considerando recorrências ativas, parcelas futuras e, quando ativado, a simulação de corte por categoria.
-              </p>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Mês mais apertado
-                </p>
-                <p
-                  className={`mt-1 text-lg font-bold ${
-                    (monthlyForecastSummary.lowestMonth?.projectedBalance ?? 0) >= 0
-                      ? "text-slate-900"
-                      : "text-rose-600"
-                  }`}
-                >
-                  {monthlyForecastSummary.lowestMonth
-                    ? formatCurrency(monthlyForecastSummary.lowestMonth.projectedBalance)
-                    : formatCurrency(0)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {monthlyForecastSummary.lowestMonth?.label || "Sem previsão"}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Meses negativos
-                </p>
-                <p
-                  className={`mt-1 text-lg font-bold ${
-                    monthlyForecastSummary.negativeMonths > 0
-                      ? "text-rose-600"
-                      : "text-emerald-600"
-                  }`}
-                >
-                  {monthlyForecastSummary.negativeMonths}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {monthlyForecastSummary.negativeMonths > 0
-                    ? "Vale revisar gastos antes que isso aconteça."
-                    : "Nenhum mês negativo na janela prevista."}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
-            {simulatedMonthlyForecast.map((month) => (
-              <div
-                key={month.key}
-                className={`rounded-2xl border px-4 py-4 ${
-                  month.isCritical
-                    ? "border-rose-200 bg-rose-50"
-                    : "border-slate-200 bg-slate-50"
-                }`}
-              >
-                <p className="text-sm font-semibold capitalize text-slate-700">
-                  {month.label}
-                </p>
-                <p
-                  className={`mt-2 text-2xl font-bold ${
-                    month.isCritical ? "text-rose-600" : "text-slate-900"
-                  }`}
-                >
-                  {formatCurrency(month.projectedBalance)}
-                </p>
-
-                <div className="mt-3 space-y-1 text-xs text-slate-500">
-                  <p>
-                    Recorrências de entrada:{" "}
-                    <span className="font-semibold text-emerald-700">
-                      {formatCurrency(month.recurringIncome)}
-                    </span>
-                  </p>
-                  <p>
-                    Recorrências de saída:{" "}
-                    <span className="font-semibold text-rose-700">
-                      {formatCurrency(month.recurringExpense)}
-                    </span>
-                  </p>
-                  <p>
-                    Parcelas futuras:{" "}
-                    <span className="font-semibold text-amber-700">
-                      {formatCurrency(month.installmentImpact)}
-                    </span>
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Evolução diária do saldo
-              </h3>
-              <p className="text-sm text-slate-400">
-                Leitura diária da sua projeção.
-              </p>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Menor saldo
-                </p>
-                <p
-                  className={`mt-1 text-lg font-bold ${
-                    (dailyProjectionSummary.lowestPoint?.balance ?? 0) >= 0
-                      ? "text-sky-600"
-                      : "text-rose-600"
-                  }`}
-                >
-                  {formatCurrency(dailyProjectionSummary.lowestPoint?.balance ?? 0)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {dailyProjectionSummary.lowestPoint
-                    ? `No dia ${dailyProjectionSummary.lowestPoint.day}`
-                    : "Sem dados"}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Maior saldo
-                </p>
-                <p className="mt-1 text-lg font-bold text-emerald-600">
-                  {formatCurrency(dailyProjectionSummary.highestPoint?.balance ?? 0)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {dailyProjectionSummary.highestPoint
-                    ? `No dia ${dailyProjectionSummary.highestPoint.day}`
-                    : "Sem dados"}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Dias negativos
-                </p>
-                <p
-                  className={`mt-1 text-lg font-bold ${
-                    dailyProjectionSummary.negativeDays > 0
-                      ? "text-rose-600"
-                      : "text-emerald-600"
-                  }`}
-                >
-                  {dailyProjectionSummary.negativeDays}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {dailyProjectionSummary.negativeDays > 0
-                    ? "O mês exige atenção"
-                    : "Sem saldo negativo"}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="h-[340px] min-w-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dailyBalanceProjection} margin={{ top: 10, right: 12, left: 12, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="day" tickLine={false} axisLine={false} />
-                <YAxis
-                  tickFormatter={(value) =>
-                    Number(value).toLocaleString("pt-BR", {
-                      style: "currency",
-                      currency: "BRL",
-                      maximumFractionDigits: 0,
-                    })
-                  }
-                  tickLine={false}
-                  axisLine={false}
-                  width={100}
-                />
-                <Tooltip content={<CustomDailyBalanceTooltip />} />
-                <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
-                <Line
-                  type="monotone"
-                  dataKey="balance"
-                  stroke={dailyBalanceProjection.some((item) => item.balance < 0) ? "#ef4444" : "#2563eb"}
-                  strokeWidth={3}
-                  dot={({ cx, cy, payload }: any) => {
-                    if (payload?.isWorst) {
-                      return (
-                        <circle
-                          cx={cx}
-                          cy={cy}
-                          r={6}
-                          fill="#f59e0b"
-                          stroke="#ffffff"
-                          strokeWidth={2}
-                        />
-                      );
-                    }
-
-                    return null;
-                  }}
-                  activeDot={{ r: 5 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-            {dailyProjectionSummary.negativeDays > 0
-              ? `Seu saldo fica negativo em ${dailyProjectionSummary.negativeDays} dia(s) do mês. O ponto mais baixo acontece no dia ${dailyProjectionSummary.lowestPoint?.day}, com ${formatCurrency(dailyProjectionSummary.lowestPoint?.balance ?? 0)}.`
-              : `Sua projeção diária permanece positiva no mês inteiro. O menor saldo previsto acontece no dia ${dailyProjectionSummary.lowestPoint?.day}, com ${formatCurrency(dailyProjectionSummary.lowestPoint?.balance ?? 0)}.`}
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">
-                Quanto ainda pode gastar
-              </p>
-              <p className="mt-1 text-2xl font-bold text-emerald-700">
-                {formatCurrency(spendingCapacitySummary.extraSafeSpend)}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-emerald-800">
-                {spendingCapacitySummary.isNegativeScenario
-                  ? "Seu cenário já fica negativo em algum momento. O ideal é evitar novos gastos neste mês."
-                  : `Esse é o valor máximo de gasto extra para você ainda terminar todos os dias projetados sem ficar negativo.`}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-sky-700">
-                Média segura por dia
-              </p>
-              <p className="mt-1 text-2xl font-bold text-sky-700">
-                {formatCurrency(spendingCapacitySummary.safeDailySpend)}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-sky-800">
-                {spendingCapacitySummary.isCurrentSelectedMonth
-                  ? `Considerando ${spendingCapacitySummary.daysRemaining} dia(s) restantes a partir de hoje.`
-                  : `Considerando ${spendingCapacitySummary.daysRemaining} dia(s) do mês filtrado.`}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-violet-700">
-                Folga mínima preservada
-              </p>
-              <p
-                className={`mt-1 text-2xl font-bold ${
-                  spendingCapacitySummary.isNegativeScenario
-                    ? "text-rose-600"
-                    : "text-violet-700"
-                }`}
-              >
-                {formatCurrency(
-                  spendingCapacitySummary.lowestFutureBalance?.balance ?? 0
-                )}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-violet-800">
-                {spendingCapacitySummary.lowestFutureBalance
-                  ? `O menor saldo da projeção acontece no dia ${spendingCapacitySummary.lowestFutureBalance.day}.`
-                  : "Sem dados suficientes para calcular a folga mínima."}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm leading-6 text-slate-600">
-            {spendingCapacitySummary.isNegativeScenario
-              ? `Hoje não existe margem segura para novos gastos extras em ${formatMonthYear(selectedDate)}. O ideal é reduzir despesas ou reforçar entradas para recuperar a folga do mês.`
-              : `Pela sua projeção atual, você pode gastar até ${formatCurrency(
-                  spendingCapacitySummary.extraSafeSpend
-                )} a mais em ${formatMonthYear(selectedDate)} sem deixar o saldo diário ficar negativo. Isso equivale a uma média segura de ${formatCurrency(
-                  spendingCapacitySummary.safeDailySpend
-                )} por dia no período considerado.`}
-          </div>
-
-          <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-5">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">Simular uma compra</h3>
-              <p className="text-sm text-slate-400">
-                Digite um valor e veja na hora se essa compra ainda cabe na sua projeção do mês.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 md:flex-row">
-              <div className="flex-1">
-                <label className="mb-1 block text-sm font-medium text-slate-700">Valor da compra</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={simulationValue}
-                  onChange={(e) => setSimulationValue(e.target.value)}
-                  placeholder="Ex: 300"
-                  className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                />
-              </div>
-
-              <div className="md:w-[280px]">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Margem segura atual</p>
-                  <p className="mt-1 text-2xl font-bold text-slate-900">
-                    {formatCurrency(spendingCapacitySummary.extraSafeSpend)}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {purchaseSimulation ? (
-              <div
-                className={`mt-4 rounded-2xl border px-4 py-4 ${
-                  purchaseSimulation.canSpend
-                    ? "border-emerald-200 bg-emerald-50"
-                    : "border-rose-200 bg-rose-50"
-                }`}
-              >
-                <p
-                  className={`text-sm font-semibold ${
-                    purchaseSimulation.canSpend ? "text-emerald-900" : "text-rose-900"
-                  }`}
-                >
-                  {purchaseSimulation.canSpend ? "Compra viável" : "Compra com risco"}
-                </p>
-                <p
-                  className={`mt-1 text-sm leading-6 ${
-                    purchaseSimulation.canSpend ? "text-emerald-800" : "text-rose-800"
-                  }`}
-                >
-                  {purchaseSimulation.message}
-                </p>
-
-                <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                  <div className="rounded-2xl bg-white/80 px-4 py-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Menor saldo após a compra</p>
-                    <p
-                      className={`mt-1 text-lg font-bold ${
-                        purchaseSimulation.lowestSimulatedBalance >= 0 ? "text-slate-900" : "text-rose-600"
-                      }`}
-                    >
-                      {formatCurrency(purchaseSimulation.lowestSimulatedBalance)}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white/80 px-4 py-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Margem que sobra depois</p>
-                    <p
-                      className={`mt-1 text-lg font-bold ${
-                        purchaseSimulation.remainingMargin >= 0 ? "text-slate-900" : "text-rose-600"
-                      }`}
-                    >
-                      {formatCurrency(purchaseSimulation.remainingMargin)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                Digite um valor para testar se a compra cabe no mês sem deixar o saldo diário ficar negativo.
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-5">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">Simular compra parcelada</h3>
-              <p className="text-sm text-slate-400">
-                Simule parcelamento e veja o impacto futuro.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.2fr_0.9fr_0.9fr]">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Valor total da compra</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={installmentSimulationValue}
-                  onChange={(e) => setInstallmentSimulationValue(e.target.value)}
-                  placeholder="0,00"
-                  className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Parcelas</label>
-                <select
-                  value={installmentSimulationCount}
-                  onChange={(e) => setInstallmentSimulationCount(e.target.value)}
-                  className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                >
-                  {Array.from({ length: 23 }, (_, index) => index + 2).map((value) => (
-                    <option key={value} value={String(value)}>
-                      {value}x
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Cartão</label>
-                <select
-                  value={installmentSimulationCardId}
-                  onChange={(e) => setInstallmentSimulationCardId(e.target.value)}
-                  className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                >
-                  <option value="">Selecione um cartão</option>
-                  {cards.map((card) => (
-                    <option key={card.id} value={card.id}>
-                      {card.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-
-            {installmentPurchaseSimulation ? (
-              <>
-                {installmentPurchaseSimulation.valid ? (
-                  <div
-                    className={`mt-4 rounded-[28px] border p-4 shadow-sm ring-1 ring-white/60 ${
-                      installmentPurchaseSimulation.firstCriticalMonth
-                        ? "border-rose-200 bg-rose-50"
-                        : "border-emerald-200 bg-emerald-50"
-                    }`}
-                  >
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <p
-                          className={`text-base font-bold ${
-                            installmentPurchaseSimulation.firstCriticalMonth
-                              ? "text-rose-700"
-                              : "text-emerald-700"
-                          }`}
-                        >
-                          {installmentPurchaseSimulation.firstCriticalMonth
-                            ? "Compra parcelada com risco"
-                            : "Compra parcelada viável"}
-                        </p>
-                        <p
-                          className={`mt-1 text-sm leading-6 ${
-                            installmentPurchaseSimulation.firstCriticalMonth
-                              ? "text-rose-700"
-                              : "text-emerald-700"
-                          }`}
-                        >
-                          {installmentPurchaseSimulation.message}
-                        </p>
-                      </div>
-
-                      <div className="rounded-[22px] bg-white/90 px-4 py-3 text-sm text-slate-700 shadow-sm">
-                        <p>
-                          Parcela estimada:{" "}
-                          <span className="font-bold text-slate-900">
-                            {formatCurrency(installmentPurchaseSimulation.installmentValue ?? 0)}
-                          </span>
-                        </p>
-                        <p>
-                          Total:{" "}
-                          <span className="font-bold text-slate-900">
-                            {formatCurrency(installmentPurchaseSimulation.amount ?? 0)}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                      <div className="rounded-[22px] bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Menor mês projetado
-                        </p>
-                        <p
-                          className={`mt-2 text-2xl font-bold ${
-                            (installmentPurchaseSimulation.lowestMonth?.projectedBalance ?? 0) < 0
-                              ? "text-rose-600"
-                              : "text-slate-900"
-                          }`}
-                        >
-                          {formatCurrency(
-                            installmentPurchaseSimulation.lowestMonth?.projectedBalance ?? 0
-                          )}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-500 capitalize">
-                          {installmentPurchaseSimulation.lowestMonth?.label ?? "--"}
-                        </p>
-                      </div>
-
-                      <div className="rounded-[22px] bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Impacto por parcela
-                        </p>
-                        <p className="mt-2 text-2xl font-bold text-fuchsia-600">
-                          {formatCurrency(installmentPurchaseSimulation.installmentValue ?? 0)}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {installmentPurchaseSimulation.installmentCount} mês(es) seguidos
-                        </p>
-                      </div>
-
-                      <div className="rounded-[22px] bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Uso do limite informado
-                        </p>
-                        <p className="mt-2 text-2xl font-bold text-slate-900">
-                          {installmentPurchaseSimulation.limitUsagePercentage != null
-                            ? `${installmentPurchaseSimulation.limitUsagePercentage.toFixed(1)}%`
-                            : "--"}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {installmentPurchaseSimulation.selectedCard?.limit
-                            ? `Com base no limite de ${formatCurrency(
-                                Number(installmentPurchaseSimulation.selectedCard.limit || 0)
-                              )}`
-                            : installmentPurchaseSimulation.selectedCard
-                            ? "Este cartão não tem limite informado"
-                            : "Selecione um cartão para comparar"}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                      <p className="text-sm text-slate-600">
-                        Salve esta decisão para consultar depois no histórico de simulações.
-                      </p>
-
-                      <button
-                        type="button"
-                        onClick={handleSaveSimulationHistory}
-                        disabled={simulationHistorySaving}
-                        className="rounded-[20px] bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:opacity-95 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {simulationHistorySaving
-                          ? "Salvando..."
-                          : "Salvar decisão no histórico"}
-                      </button>
-                    </div>
-
-                    <div className="mt-4 space-y-3">
-                      {(installmentPurchaseSimulation.months ?? []).map((month) => (
-                        <div
-                          key={month.key}
-                          className={`rounded-2xl border px-4 py-3 ${
-                            month.isCritical
-                              ? "border-rose-200 bg-white"
-                              : "border-slate-200 bg-white"
-                          }`}
-                        >
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                              <p className="font-semibold capitalize text-slate-900">
-                                {month.label}
-                              </p>
-                              <p className="text-sm text-slate-400">
-                                {month.isSelectedMonth
-                                  ? "Primeira parcela no mês filtrado"
-                                  : "Mês futuro impactado pela compra"}
-                              </p>
-                            </div>
-
-                            <div className="grid gap-3 sm:grid-cols-3">
-                              <div className="rounded-[18px] bg-slate-50 px-3 py-3 text-right shadow-sm">
-                                <p className="text-xs text-slate-500">Parcela nova</p>
-                                <p className="font-bold text-fuchsia-600">
-                                  {formatCurrency(month.newInstallmentImpact)}
-                                </p>
-                              </div>
-
-                              <div className="rounded-[18px] bg-slate-50 px-3 py-3 text-right shadow-sm">
-                                <p className="text-xs text-slate-500">Impacto total</p>
-                                <p className="font-bold text-slate-900">
-                                  {formatCurrency(month.totalImpact)}
-                                </p>
-                              </div>
-
-                              <div className="rounded-[18px] bg-slate-50 px-3 py-3 text-right shadow-sm">
-                                <p className="text-xs text-slate-500">Saldo projetado</p>
-                                <p
-                                  className={`font-bold ${
-                                    month.projectedBalance < 0
-                                      ? "text-rose-600"
-                                      : "text-sky-600"
-                                  }`}
-                                >
-                                  {formatCurrency(month.projectedBalance)}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    {installmentPurchaseSimulation.message}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="mt-4 rounded-[20px] border border-slate-200 bg-slate-50/90 px-4 py-3 text-sm text-slate-600 shadow-sm">
-                Preencha o valor, a quantidade de parcelas e, se quiser, o cartão para simular o impacto da compra.
-              </div>
-            )}
-
-            {purchaseRecommendation ? (
-              <div className={`mt-4 rounded-[28px] border p-5 shadow-[0_16px_40px_rgba(15,23,42,0.08)] ring-1 ring-white/70 transition duration-200 hover:shadow-[0_22px_50px_rgba(15,23,42,0.10)] ${purchaseRecommendation.container}`}>
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                        {purchaseRecommendation.title}
-                      </h3>
-                      <span
-                        className={`rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide ${purchaseRecommendation.badge}`}
-                      >
-                        Decisão automática
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-700">
-                      {purchaseRecommendation.summary}
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">
-                      {purchaseRecommendation.recommendation}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-600">
-                      {purchaseRecommendation.reason}
-                    </p>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-2xl bg-white/80 px-4 py-3 text-right">
-                      <p className="text-xs text-slate-500">Melhor cartão</p>
-                      <p className="text-xl font-bold tracking-tight text-slate-900">
-                        {purchaseRecommendation.bestCardName}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl bg-white/80 px-4 py-3 text-right">
-                      <p className="text-xs text-slate-500">Melhor parcelamento</p>
-                      <p className="text-xl font-bold tracking-tight text-slate-900">
-                        {purchaseRecommendation.installmentLabel}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl bg-white/80 px-4 py-3 text-right">
-                      <p className="text-xs text-slate-500">Menor mês projetado</p>
-                      <p className="text-xl font-bold tracking-tight text-slate-900">
-                        {formatCurrency(purchaseRecommendation.lowestMonthBalance)}
-                      </p>
-                      <p className="text-xs capitalize text-slate-500">
-                        {purchaseRecommendation.lowestMonthLabel}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-          {bestCardComparison ? (
-            <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-5">
-              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <h3 className="text-xl font-bold tracking-tight text-slate-900">Comparar melhor cartão</h3>
-                  <p className="text-sm text-slate-400">
-                    Comparação automática entre seus cartões.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                  <p className="font-semibold">
-                    Melhor opção: {bestCardComparison.bestOption?.card.name || "--"}
-                  </p>
-                  <p>
-                    Parcela estimada: {formatCurrency(bestCardComparison.installmentValue)}
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {bestCardComparison.comparisons.map((option, index) => {
-                  const toneStyles =
-                    option.status === "risk"
-                      ? {
-                          container: "border-rose-200 bg-rose-50",
-                          badge: "bg-rose-100 text-rose-700",
-                          value: "text-rose-600",
-                        }
-                      : option.status === "attention"
-                      ? {
-                          container: "border-amber-200 bg-amber-50",
-                          badge: "bg-amber-100 text-amber-700",
-                          value: "text-amber-600",
-                        }
-                      : {
-                          container: "border-emerald-200 bg-emerald-50",
-                          badge: "bg-emerald-100 text-emerald-700",
-                          value: "text-emerald-600",
-                        };
-
-                  return (
-                    <div
-                      key={option.card.id}
-                      className={`rounded-2xl border p-4 ${toneStyles.container}`}
-                    >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-base font-bold text-slate-900">
-                              {index === 0 ? "ðŸ† " : ""}{option.card.name}
-                            </p>
-                            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${toneStyles.badge}`}>
-                              {option.statusLabel}
-                            </span>
-                          </div>
-
-                          <p className="mt-2 text-sm text-slate-600">
-                            {option.firstCriticalMonth
-                              ? `A projeção fica negativa em ${option.firstCriticalMonth.label}.`
-                              : `A menor projeção fica em ${option.lowestMonth.label}, com ${formatCurrency(option.lowestMonth.projectedBalance)}.`}
-                          </p>
-                        </div>
-
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="rounded-xl bg-white px-3 py-2 text-right">
-                            <p className="text-xs text-slate-500">Menor mês</p>
-                            <p className={`font-bold ${toneStyles.value}`}>
-                              {formatCurrency(option.lowestMonth.projectedBalance)}
-                            </p>
-                            <p className="text-xs capitalize text-slate-500">{option.lowestMonth.label}</p>
-                          </div>
-
-                          <div className="rounded-xl bg-white px-3 py-2 text-right">
-                            <p className="text-xs text-slate-500">Uso do limite</p>
-                            <p className="font-bold text-slate-900">
-                              {option.limitUsagePercentage !== null
-                                ? `${option.limitUsagePercentage.toFixed(1)}%`
-                                : "--"}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {option.card.limit
-                                ? `Limite ${formatCurrency(Number(option.card.limit || 0))}`
-                                : "Sem limite informado"}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-white px-3 py-2 text-right">
-                            <p className="text-xs text-slate-500">Folga no limite</p>
-                            <p className="font-bold text-slate-900">
-                              {option.remainingLimit !== null
-                                ? formatCurrency(option.remainingLimit)
-                                : "--"}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {bestCardComparison.installmentCount}x de {formatCurrency(bestCardComparison.installmentValue)}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {worstDay ? (
-            <div className="mt-4 text-sm text-slate-600">
-              Pior momento do mês: dia <strong>{worstDay.day}</strong> com{" "}
-              <span className={worstDay.balance < 0 ? "font-semibold text-rose-600" : "font-semibold text-slate-900"}>
-                {formatCurrency(worstDay.balance)}
-              </span>
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-        {purchaseRiskAlerts.length > 0 && (
-          <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">Alertas de risco real</h3>
-              <p className="text-sm text-slate-400">
-                O app resume o risco da decisão.
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {purchaseRiskAlerts.map((alert) => {
-                const styles =
-                  alert.tone === "danger"
-                    ? {
-                        container: "border-rose-200 bg-rose-50",
-                        badge: "bg-rose-100 text-rose-700",
-                        title: "text-rose-900",
-                        text: "text-rose-800",
-                        label: "Risco real",
-                      }
-                    : alert.tone === "warning"
-                    ? {
-                        container: "border-amber-200 bg-amber-50",
-                        badge: "bg-amber-100 text-amber-700",
-                        title: "text-amber-900",
-                        text: "text-amber-800",
-                        label: "Atenção",
-                      }
-                    : {
-                        container: "border-emerald-200 bg-emerald-50",
-                        badge: "bg-emerald-100 text-emerald-700",
-                        title: "text-emerald-900",
-                        text: "text-emerald-800",
-                        label: "Seguro",
-                      };
-
-                return (
-                  <div
-                    key={alert.id}
-                    className={`rounded-2xl border p-4 ${styles.container}`}
-                  >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className={`font-semibold ${styles.title}`}>{alert.title}</p>
-                        <p className={`mt-1 text-sm leading-6 ${styles.text}`}>
-                          {alert.message}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`inline-flex w-fit rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide ${styles.badge}`}
-                      >
-                        {styles.label}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">Histórico de simulações</h3>
-              <p className="text-sm text-slate-400">
-                Simulações salvas para consulta rápida.
-              </p>
-            </div>
-
-            <div className="rounded-[20px] border border-slate-200/70 bg-slate-50/80 px-4 py-2.5 text-sm text-slate-600 shadow-sm">
-              {simulationHistory.length} item(ns) salvo(s)
-            </div>
-          </div>
-
-          {simulationHistory.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-              Nenhuma simulação salva ainda. Use o botão  €œSalvar decisão no histórico €.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {simulationHistory.map((item) => {
-                const toneStyles =
-                  item.recommendationStatus === "danger"
-                    ? {
-                        container: "border-rose-200 bg-rose-50",
-                        badge: "bg-rose-100 text-rose-700",
-                        value: "text-rose-600",
-                      }
-                    : item.recommendationStatus === "warning"
-                    ? {
-                        container: "border-amber-200 bg-amber-50",
-                        badge: "bg-amber-100 text-amber-700",
-                        value: "text-amber-600",
-                      }
-                    : {
-                        container: "border-emerald-200 bg-emerald-50",
-                        badge: "bg-emerald-100 text-emerald-700",
-                        value: "text-emerald-600",
-                      };
-
-                return (
-                  <div
-                    key={item.id}
-                    className={`rounded-2xl border p-4 ${toneStyles.container}`}
-                  >
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-base font-bold text-slate-900">
-                            {item.title || "Simulação salva"}
-                          </p>
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${toneStyles.badge}`}>
-                            {item.recommendationTitle}
-                          </span>
-                        </div>
-
-                        <p className="mt-2 text-sm text-slate-600">
-                          {item.recommendedCardName
-                            ? `Cartão recomendado: ${item.recommendedCardName}`
-                            : "Sem cartão recomendado"}
-                          {"  . "}
-                          {item.installmentCount}x de {formatCurrency(item.installmentAmount)}
-                        </p>
-
-                        <p className="mt-1 text-sm text-slate-600">
-                          {item.recommendationReason || "Sem observação adicional."}
-                        </p>
-
-                        <p className="mt-2 text-xs text-slate-500">
-                          Salvo em {new Date(item.createdAt).toLocaleDateString("pt-BR")} Ã s {new Date(item.createdAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                        </p>
-                      </div>
-
-                      <div className="flex flex-col gap-3 lg:items-end">
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="rounded-xl bg-white px-3 py-2 text-right">
-                            <p className="text-xs text-slate-500">Valor total</p>
-                            <p className="font-bold text-slate-900">
-                              {formatCurrency(item.totalAmount)}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-white px-3 py-2 text-right">
-                            <p className="text-xs text-slate-500">Menor mês</p>
-                            <p className={`font-bold ${toneStyles.value}`}>
-                              {item.lowestProjectedBalance !== null && item.lowestProjectedBalance !== undefined
-                                ? formatCurrency(item.lowestProjectedBalance)
-                                : "--"}
-                            </p>
-                            <p className="text-xs capitalize text-slate-500">
-                              {item.lowestProjectedMonthLabel || "--"}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-white px-3 py-2 text-right">
-                            <p className="text-xs text-slate-500">Uso do limite</p>
-                            <p className="font-bold text-slate-900">
-                              {item.limitUsagePercent !== null && item.limitUsagePercent !== undefined
-                                ? `${item.limitUsagePercent.toFixed(1)}%`
-                                : "--"}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2 lg:justify-end">
-                          <button
-                            type="button"
-                            onClick={() => handleApplySimulationHistory(item)}
-                            disabled={
-                              simulationHistoryApplyingId === item.id ||
-                              simulationHistoryDeletingId === item.id
-                            }
-                            className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {simulationHistoryApplyingId === item.id
-                              ? "Transformando..."
-                              : "Transformar em compra"}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSimulationHistory(item.id)}
-                            disabled={
-                              simulationHistoryDeletingId === item.id ||
-                              simulationHistoryApplyingId === item.id
-                            }
-                            className="rounded-2xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {simulationHistoryDeletingId === item.id ? "Excluindo..." : "Excluir histórico"}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4">
-            <h3 className="text-xl font-bold tracking-tight text-slate-900">Modo economia</h3>
-            <p className="text-sm text-slate-400">
-              Plano prático para proteger sua margem no mês.
-            </p>
-          </div>
-
           <div
-            className={`rounded-[28px] border p-5 shadow-[0_14px_36px_rgba(15,23,42,0.07)] ring-1 ring-white/60 ${
-              economyModePlan.statusTone === "danger"
+            className={`mt-4 rounded-2xl border px-4 py-4 ${
+              assistantSummary.tone === "danger"
                 ? "border-rose-200 bg-rose-50"
-                : economyModePlan.statusTone === "warning"
+                : assistantSummary.tone === "warning"
                 ? "border-amber-200 bg-amber-50"
+                : assistantSummary.tone === "info"
+                ? "border-sky-200 bg-sky-50"
                 : "border-emerald-200 bg-emerald-50"
             }`}
           >
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h4
-                    className={`text-lg font-bold ${
-                      economyModePlan.statusTone === "danger"
-                        ? "text-rose-900"
-                        : economyModePlan.statusTone === "warning"
-                        ? "text-amber-900"
-                        : "text-emerald-900"
-                    }`}
-                  >
-                    {economyModePlan.headline}
-                  </h4>
+            <p
+              className={`text-sm font-semibold ${
+                assistantSummary.tone === "danger"
+                  ? "text-rose-900"
+                  : assistantSummary.tone === "warning"
+                  ? "text-amber-900"
+                  : assistantSummary.tone === "info"
+                  ? "text-sky-900"
+                  : "text-emerald-900"
+              }`}
+            >
+              {assistantSummary.status}
+            </p>
+            <p className="mt-1 text-sm text-slate-700">{assistantSummary.alert}</p>
+          </div>
 
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                      economyModePlan.statusTone === "danger"
-                        ? "bg-rose-100 text-rose-700"
-                        : economyModePlan.statusTone === "warning"
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-emerald-100 text-emerald-700"
-                    }`}
-                  >
-                    {economyModePlan.statusTone === "danger"
-                      ? "Ação urgente"
-                      : economyModePlan.statusTone === "warning"
-                      ? "Ajuste recomendado"
-                      : "Situação saudável"}
-                  </span>
-                </div>
-
-                <p
-                  className={`mt-2 text-sm leading-6 ${
-                    economyModePlan.statusTone === "danger"
-                      ? "text-rose-800"
-                      : economyModePlan.statusTone === "warning"
-                      ? "text-amber-800"
-                      : "text-emerald-800"
-                  }`}
-                >
-                  {economyModePlan.summary}
-                </p>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl bg-white px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Redução no mês
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                    {formatCurrency(economyModePlan.reductionNeededThisMonth)}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl bg-white px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Meta por dia
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                    {formatCurrency(economyModePlan.reductionPerDay)}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl bg-white px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Dias restantes
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-slate-900 md:text-xl">
-                    {economyModePlan.daysRemaining}
-                  </p>
-                </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{assistantSummary.focusLabel}</p><span className="inline-flex rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white">Prioridade 1</span></div>
+              <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.action}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.actionDetail}</p>
+              <p className="mt-2 text-xs font-medium text-slate-700">{assistantSummary.actionReason}</p>
+              <div className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Impacto esperado</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">{assistantSummary.actionImpact}</p>
               </div>
             </div>
 
-            {economyModePlan.topReductionCategories.length > 0 ? (
-              <div className="mt-5">
-                <p className="text-sm font-semibold text-slate-900">
-                  Onde vale cortar primeiro
-                </p>
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+              <p className="text-sm font-semibold text-slate-900">Limite de hoje</p>
+              <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.dailyLimit}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.dailyLimitSupport}</p>
+            </div>
+          </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  {economyModePlan.topReductionCategories.map((item) => (
-                    <div
-                      key={item.category}
-                      className="rounded-2xl border border-white/70 bg-white px-4 py-3"
-                    >
+          <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-900">Depois da prioridade 1</p>
+              <span className="text-xs text-slate-500">Só o que merece atenção depois</span>
+            </div>
+
+            {supportingCategoriesOutOfPace.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {supportingCategoriesOutOfPace.map((item) => (
+                  <div
+                    key={item.category}
+                    className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">{item.shortLabel}</p>
+                      <p className="mt-1 text-xs text-slate-500">{item.shortStatus}</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">{item.actionHint}</p>
+                    </div>
+                    <div className="text-right">
                       <p className="text-sm font-semibold text-slate-900">
-                        {getCategoryLabel(item.category)}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-600">
-                        Excesso sobre a meta:{" "}
-                        <span className="font-bold text-rose-600">
-                          {formatCurrency(item.exceededBy)}
-                        </span>
+                        {formatCurrency(item.paceDifference)}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        Gasto atual {formatCurrency(item.spent)}  . Meta {formatCurrency(item.goal)}
+                        {item.paceStatus === "off_track" ? "acima do ritmo" : "na zona de atenção"}
                       </p>
                     </div>
-                  ))}
-                </div>
-              </div>
-            ) : economyModePlan.statusTone !== "success" ? (
-              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-white/80 px-4 py-3 text-sm text-slate-600">
-                Ainda não há categorias acima da meta. O ajuste sugerido depende mais de segurar gastos variáveis no restante do mês.
+                  </div>
+                ))}
               </div>
             ) : (
-              <div className="mt-5 rounded-2xl border border-dashed border-emerald-200 bg-white/80 px-4 py-3 text-sm text-emerald-700">
-                Seu mês está com margem positiva. Continue acompanhando, mas sem necessidade de cortes extras agora.
-              </div>
+              <p className="mt-3 text-sm text-slate-600">Depois da prioridade principal, não existe outra frente crítica chamando mais atenção neste momento.</p>
             )}
+          </div>
+
+          {assistantSummary.secondaryAlert ? (
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <p className="text-sm font-semibold text-slate-900">Contexto rápido</p>
+              <p className="mt-1 text-sm text-slate-600">{assistantSummary.secondaryAlert}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Esse ponto foi priorizado porque tem mais impacto imediato no seu mês.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="mt-4">
+            <Link
+              href="/intelligence"
+              className="flex w-full items-center justify-between rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              <span>Ver análise completa</span>
+              <span>→</span>
+            </Link>
           </div>
         </section>
 
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-2">
+          <Link
+            href="/transactions"
+            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+          >
+            <p className="text-sm font-semibold text-slate-900">Lançar transação</p>
+            <p className="mt-1 text-xs text-slate-500">Registrar entradas e saídas.</p>
+          </Link>
 
-        {smartAlerts.length > 0 && (
-          <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Alertas inteligentes
-              </h3>
-              <p className="text-sm text-slate-400">
-                O que mais merece sua atenção agora
-              </p>
-            </div>
+          <Link
+            href="/invoices"
+            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+          >
+            <p className="text-sm font-semibold text-slate-900">Cartão de crédito</p>
+            <p className="mt-1 text-xs text-slate-500">Ver faturas e limite.</p>
+          </Link>
 
-            <div className="space-y-3">
-              {smartAlerts.map((alert) => {
-                const styles = getAlertStyles(alert.tone);
+          <Link
+            href="/goals"
+            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+          >
+            <p className="text-sm font-semibold text-slate-900">Metas e categorias</p>
+            <p className="mt-1 text-xs text-slate-500">Acompanhar metas do mês.</p>
+          </Link>
 
-                return (
-                  <div
-                    key={alert.id}
-                    className={`rounded-2xl border p-4 ${styles.container}`}
-                  >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className={`font-semibold ${styles.title}`}>
-                          {alert.title}
-                        </p>
-                        <p className={`mt-1 text-sm leading-6 ${styles.text}`}>
-                          {alert.message}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`inline-flex w-fit rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide ${styles.badge}`}
-                      >
-                        {styles.label}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {futureInstallmentsByMonth.length > 0 && (
-          <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Previsão mês a mês
-              </h3>
-              <p className="text-sm text-slate-400">
-                Como as parcelas futuras impactam os próximos meses
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {futureInstallmentsByMonth.map((group) => (
-                <div
-                  key={group.key}
-                  className="rounded-[22px] border border-slate-200/70 bg-white p-4 shadow-[0_6px_18px_rgba(15,23,42,0.04)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_rgba(15,23,42,0.08)]"
-                >
-                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div>
-                      <p className="font-semibold capitalize text-slate-900">
-                        {group.label}
-                      </p>
-                      <p className="text-sm text-slate-400">
-                        {group.count} parcela(s) prevista(s)
-                      </p>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="rounded-xl bg-slate-50 px-4 py-3 text-right">
-                        <p className="text-xs text-slate-500">Impacto no mês</p>
-                        <p className="text-lg font-bold text-fuchsia-600">
-                          {formatCurrency(group.total)}
-                        </p>
-                      </div>
-
-                      <div className="rounded-xl bg-slate-50 px-4 py-3 text-right">
-                        <p className="text-xs text-slate-500">
-                          Saldo projetado
-                        </p>
-                        <p
-                          className={`text-lg font-bold ${
-                            group.projectedBalance >= 0
-                              ? "text-sky-600"
-                              : "text-rose-600"
-                          }`}
-                        >
-                          {formatCurrency(group.projectedBalance)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-2">
-                    {group.transactions.map((transaction) => (
-                      <div
-                        key={transaction.id}
-                        className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-slate-900">
-                            {transaction.title}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {transaction.card?.name || "Cartão"}  .{" "}
-                            {new Date(transaction.date).toLocaleDateString(
-                              "pt-BR"
-                            )}
-                          </p>
-                        </div>
-
-                        <p className="ml-3 whitespace-nowrap text-sm font-bold text-fuchsia-600">
-                          {formatCurrency(Number(transaction.amount))}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {foodAlert && (
-          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-            <p className="text-sm font-semibold text-amber-900">
-              Alerta automático
-            </p>
-            <p className="mt-1 text-base text-amber-800">{foodAlert}</p>
-          </section>
-        )}
-
-        {futureInstallments.length > 0 && (
-          <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Parcelas futuras
-              </h3>
-              <p className="text-sm text-slate-400">
-                Compromissos futuros já assumidos no cartão
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {futureInstallments.slice(0, 8).map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="flex flex-col gap-2 rounded-2xl border border-slate-200 p-4 md:flex-row md:items-center md:justify-between"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-900">
-                      {transaction.title}
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      {transaction.card?.name || "Cartão"}  .{" "}
-                      {new Date(transaction.date).toLocaleDateString("pt-BR")}
-                    </p>
-                  </div>
-
-                  <div className="text-right">
-                    <p className="text-sm text-slate-400">Valor</p>
-                    <p className="text-lg font-bold text-fuchsia-600">
-                      {formatCurrency(Number(transaction.amount))}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {openInvoices.length > 0 && (
-          <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Próximas faturas em aberto
-              </h3>
-              <p className="text-sm text-slate-400">
-                Valores que já estão comprometendo seu saldo
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {openInvoices.map((invoice) => (
-                <div
-                  key={invoice.id}
-                  className="flex flex-col gap-2 rounded-2xl border border-slate-200 p-4 md:flex-row md:items-center md:justify-between"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-900">
-                      {invoice.card?.name || "Cartão"}
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      {formatInvoiceLabel(invoice.month, invoice.year)}
-                    </p>
-                  </div>
-
-                  <div className="text-right">
-                    <p className="text-sm text-slate-400">Total em aberto</p>
-                    <p className="text-lg font-bold text-amber-600">
-                      {formatCurrency(invoice.total)}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="rounded-3xl bg-white p-6 shadow-sm xl:col-span-2">
-            <div className="mb-4">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Gastos por categoria
-              </h3>
-              <p className="text-sm text-slate-400">
-                Distribuição das despesas do período selecionado
-              </p>
-            </div>
-
-            {loading ? (
-              <div className="flex h-[320px] items-center justify-center text-slate-500">
-                Carregando gráfico...
-              </div>
-            ) : categoryChartData.length === 0 ? (
-              <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-200 text-slate-500">
-                Ainda não existem despesas neste período para gerar o gráfico.
-              </div>
-            ) : (
-              <div className="h-[340px] min-w-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={categoryChartData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={110}
-                      label={({ name, percent }) =>
-                        `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
-                      }
-                    >
-                      {categoryChartData.map((entry, index) => (
-                        <Cell
-                          key={`${entry.name}-${index}`}
-                          fill={COLORS[index % COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value) => formatCurrency(Number(value ?? 0))}
-                    />
-                    <Legend
-                      formatter={(value) => getCategoryLabel(String(value))}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-6">
-            <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Maior gasto do período
-              </h3>
-
-              {biggestExpenseCategory ? (
-                <div className="mt-4 space-y-2">
-                  <p className="text-sm text-slate-400">Categoria</p>
-                  <p className="text-lg font-bold text-slate-900 md:text-xl">
-                    {getCategoryLabel(biggestExpenseCategory.name)}
-                  </p>
-                  <p className="text-2xl font-bold text-rose-600">
-                    {formatCurrency(biggestExpenseCategory.value)}
-                  </p>
-                  <p className="text-sm text-slate-400">
-                    {biggestExpenseCategory.percentage.toFixed(1)}% das despesas
-                    do período
-                  </p>
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-500">
-                  Ainda não há despesas neste período.
-                </p>
-              )}
-            </div>
-
-            <div className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Ãšltimas movimentações
-              </h3>
-
-              {loading ? (
-                <p className="mt-4 text-sm text-slate-500">Carregando...</p>
-              ) : lastTransactions.length === 0 ? (
-                <p className="mt-4 text-sm text-slate-500">
-                  Nenhuma transação encontrada neste período.
-                </p>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  {lastTransactions.map((transaction) => (
-                    <div
-                      key={transaction.id}
-                      className="flex items-center justify-between rounded-2xl border border-slate-100 p-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-medium text-slate-900">
-                          {transaction.title}
-                        </p>
-                        <p className="text-sm text-slate-400">
-                          {getCategoryLabel(transaction.category)} • {getFlowTypeLabel(transaction.isFixed)} •{" "}
-                          {new Date(transaction.date).toLocaleDateString(
-                            "pt-BR"
-                          )}
-                        </p>
-                      </div>
-
-                      <p
-                        className={`ml-3 whitespace-nowrap text-sm font-bold ${
-                          isIncomeType(transaction.type)
-                            ? "text-emerald-600"
-                            : "text-rose-600"
-                        }`}
-                      >
-                        {isIncomeType(transaction.type) ? "+ " : "- "}
-                        {formatCurrency(Number(transaction.amount))}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <Link
+            href="/intelligence"
+            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+          >
+            <p className="text-sm font-semibold text-slate-900">Inteligência financeira</p>
+            <p className="mt-1 text-xs text-slate-500">Ver alertas e recomendações.</p>
+          </Link>
         </section>
 
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
-          <div className="mb-4">
-            <h3 className="text-xl font-bold tracking-tight text-slate-900">
-              Metas por categoria
-            </h3>
-            <p className="text-sm text-slate-400">
-              Defina um limite mensal, acompanhe quanto já foi gasto e veja se o ritmo do mês está saudável.
-            </p>
-          </div>
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
+          <Link
+            href="/accounts"
+            className="rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-center text-sm font-semibold text-slate-700 transition duration-200 hover:bg-slate-50"
+          >
+            Contas e cartões
+          </Link>
 
-          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
-            {GOAL_CATEGORIES.map((category) => (
-              <div
-                key={category}
-                className="rounded-[22px] border border-slate-200/70 bg-white p-4 shadow-[0_6px_18px_rgba(15,23,42,0.04)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_rgba(15,23,42,0.08)]"
-              >
-                <p className="font-medium text-slate-900">
-                  {getCategoryLabel(category)}
-                </p>
+          <button
+            type="button"
+            onClick={handleResetAllData}
+            disabled={resettingData}
+            className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3.5 text-sm font-semibold text-rose-700 transition duration-200 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {resettingData ? "Resetando..." : "Resetar dados"}
+          </button>
 
-                <div className="mt-3 flex gap-2">
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="Meta em R$"
-                    value={goalInputs[category] ?? ""}
-                    onChange={(e) =>
-                      handleGoalInputChange(category, e.target.value)
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none transition focus:border-slate-400"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => saveGoal(category)}
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                  >
-                    Salvar
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-6 space-y-3">
-            {goalSummary.length === 0 ? (
-              <p className="text-sm text-slate-400">
-                Nenhuma meta cadastrada ainda para este período.
-              </p>
-            ) : (
-              goalPaceSummary.map((item) => (
-                <div
-                  key={item.category}
-                  className="rounded-[22px] border border-slate-200/70 bg-white p-4 shadow-[0_6px_18px_rgba(15,23,42,0.04)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_rgba(15,23,42,0.08)]"
-                >
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="font-semibold text-slate-900">
-                        {getCategoryLabel(item.category)}
-                      </p>
-                      <div className="mt-1 space-y-1 text-sm text-slate-400">
-                        <p>
-                          Meta original: {formatCurrency(item.goal)}   • Gasto:{" "}
-                          {formatCurrency(item.spent)}
-                        </p>
-                        {item.plannedCut > 0 ? (
-                          <p>
-                            Plano de corte:{" "}
-                            <span className="font-medium text-rose-600">
-                              -{formatCurrency(item.plannedCut)}
-                            </span>
-                            {" "}• Meta ajustada recomendada:{" "}
-                            <span className="font-medium text-sky-700">
-                              {formatCurrency(item.adjustedGoal)}
-                            </span>
-                          </p>
-                        ) : (
-                          <p>
-                            Meta ajustada recomendada:{" "}
-                            <span className="font-medium text-sky-700">
-                              {formatCurrency(item.goal)}
-                            </span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="text-sm font-medium">
-                      {item.adjustedExceeded ? (
-                        <span className="text-rose-600">
-                          Estourou em {formatCurrency(Math.abs(item.adjustedRemaining))} considerando o plano
-                        </span>
-                      ) : (
-                        <span className="text-emerald-600">
-                          Restam {formatCurrency(Math.max(item.adjustedRemaining, 0))} dentro da meta ajustada
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className={`h-full rounded-full ${
-                        item.adjustedExceeded ? "bg-rose-500" : "bg-emerald-500"
-                      }`}
-                      style={{
-                        width: `${Math.min(item.adjustedPercentage, 100)}%`,
-                      }}
-                    />
-                  </div>
-
-                  <p className="mt-2 text-xs text-slate-500">
-                    {item.adjustedGoal > 0
-                      ? `${item.adjustedPercentage.toFixed(1)}% da meta ajustada utilizada`
-                      : item.goal > 0
-                      ? "A meta ajustada zerou após o plano de corte."
-                      : "Sem meta definida"}
-                  </p>
-
-                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Ritmo do mês
-                    </p>
-
-                    {item.paceStatus === "future" ? (
-                      <p className="mt-2 text-sm text-slate-600">
-                        Este mês ainda não começou. O acompanhamento por ritmo será ativado quando o período iniciar.
-                      </p>
-                    ) : (
-                      <>
-                        <div className="mt-2 grid gap-2 md:grid-cols-2">
-                          <div>
-                            <p className="text-xs text-slate-500">Ideal até hoje</p>
-                            <p className="text-sm font-semibold text-slate-900">
-                              {formatCurrency(item.shouldHaveSpent)}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-slate-500">Gasto real até hoje</p>
-                            <p className="text-sm font-semibold text-slate-900">
-                              {formatCurrency(item.spent)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                              item.paceStatus === "controlled"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : item.paceStatus === "attention"
-                                ? "bg-amber-100 text-amber-700"
-                                : "bg-rose-100 text-rose-700"
-                            }`}
-                          >
-                            {item.paceStatus === "controlled"
-                              ? "Controlada"
-                              : item.paceStatus === "attention"
-                              ? "Atenção"
-                              : "Fora do plano"}
-                          </span>
-
-                          <p className="text-xs text-slate-500">
-                            {item.paceStatus === "controlled"
-                              ? `Você está dentro do ritmo esperado para ${item.elapsedDays} dia(s) do mês.`
-                              : item.paceStatus === "attention"
-                              ? `Você já gastou ${formatCurrency(
-                                  Math.abs(item.paceDifference)
-                                )} acima do ritmo ideal.`
-                              : `Você está ${formatCurrency(
-                                  Math.abs(item.paceDifference)
-                                )} acima do ritmo recomendado até agora.`}
-                          </p>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
+          <div className="rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-center">
+            <LogoutButton />
           </div>
         </section>
       </div>
