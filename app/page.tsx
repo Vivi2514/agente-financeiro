@@ -108,6 +108,7 @@ type Invoice = {
   year: number;
   total: number;
   status: "OPEN" | "PAID";
+  dueDate?: string | null;
   paidAt?: string | null;
   paidFromAccountId?: string | null;
   card?: {
@@ -1567,11 +1568,16 @@ export default function DashboardPage() {
   }, [openInvoicesTotal, selectedMonthCreditPurchasesTotal]);
 
   const selectedMonthOpenInvoices = useMemo(() => {
-    return openInvoices.filter(
-      (invoice) =>
-        invoice.year === selectedMonthMeta.year &&
-        invoice.month === selectedMonthMeta.month
-    );
+    return openInvoices.filter((invoice) => {
+      if (!invoice.dueDate) return false;
+
+      const dueDate = new Date(invoice.dueDate);
+
+      return (
+        dueDate.getFullYear() === selectedMonthMeta.year &&
+        dueDate.getMonth() + 1 === selectedMonthMeta.month
+      );
+    });
   }, [openInvoices, selectedMonthMeta.month, selectedMonthMeta.year]);
 
   const selectedMonthOpenInvoicesTotal = useMemo(() => {
@@ -1580,6 +1586,191 @@ export default function DashboardPage() {
       0
     );
   }, [selectedMonthOpenInvoices]);
+
+
+  const projectedMonthIncomeEntries = useMemo(() => {
+    const plannedIncomeEntries = plannedMonthTransactions
+      .filter((transaction) => isIncomeType(transaction.type))
+      .map((transaction) => ({
+        id: `transaction-income-${transaction.id}`,
+        title: transaction.title,
+        amount: getTransactionEffectiveAmount(transaction),
+        date: new Date(getTransactionEffectiveDate(transaction)),
+        kind: "income" as const,
+        source: "transaction" as const,
+      }));
+
+    const recurringIncomeEntries = monthlyRecurringProjection.pendingIncomeItems.map((item) => ({
+      id: `recurring-income-${item.id}`,
+      title: item.title,
+      amount: Number(item.amount || 0),
+      date: new Date(
+        selectedMonthMeta.year,
+        selectedMonthMeta.month - 1,
+        Math.min(Math.max(Number(item.dayOfMonth || 1), 1), selectedMonthMeta.daysInMonth)
+      ),
+      kind: "income" as const,
+      source: "recurring" as const,
+    }));
+
+    return [...plannedIncomeEntries, ...recurringIncomeEntries].sort(
+      (a, b) => a.date.getTime() - b.date.getTime()
+    );
+  }, [
+    monthlyRecurringProjection.pendingIncomeItems,
+    plannedMonthTransactions,
+    selectedMonthMeta.daysInMonth,
+    selectedMonthMeta.month,
+    selectedMonthMeta.year,
+  ]);
+
+  const projectedMonthCashExpenseEntries = useMemo(() => {
+    const plannedExpenseEntries = plannedMonthTransactions
+      .filter((transaction) => {
+        if (!isExpenseType(transaction.type)) return false;
+        const paymentMethod = normalizeComparableText(transaction.paymentMethod);
+        return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
+      })
+      .map((transaction) => ({
+        id: `transaction-expense-${transaction.id}`,
+        title: transaction.title,
+        amount: getTransactionEffectiveAmount(transaction),
+        date: new Date(getTransactionEffectiveDate(transaction)),
+        kind: "expense" as const,
+        source: "transaction" as const,
+      }));
+
+    const recurringExpenseEntries = monthlyRecurringProjection.pendingExpenseItems
+      .filter((item) => {
+        const paymentMethod = normalizeComparableText(item.paymentMethod);
+        return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
+      })
+      .map((item) => ({
+        id: `recurring-expense-${item.id}`,
+        title: item.title,
+        amount: Number(item.amount || 0),
+        date: new Date(
+          selectedMonthMeta.year,
+          selectedMonthMeta.month - 1,
+          Math.min(Math.max(Number(item.dayOfMonth || 1), 1), selectedMonthMeta.daysInMonth)
+        ),
+        kind: "expense" as const,
+        source: "recurring" as const,
+      }));
+
+    return [...plannedExpenseEntries, ...recurringExpenseEntries].sort(
+      (a, b) => a.date.getTime() - b.date.getTime()
+    );
+  }, [
+    monthlyRecurringProjection.pendingExpenseItems,
+    plannedMonthTransactions,
+    selectedMonthMeta.daysInMonth,
+    selectedMonthMeta.month,
+    selectedMonthMeta.year,
+  ]);
+
+  const projectedMonthInvoiceEntries = useMemo(() => {
+    return selectedMonthOpenInvoices
+      .map((invoice) => ({
+        id: `invoice-${invoice.id}`,
+        title: `Fatura ${invoice.card?.name || "cartão"}`,
+        amount: Number(invoice.total || 0),
+        date: invoice.dueDate ? new Date(invoice.dueDate) : new Date(invoice.year, invoice.month - 1, 10),
+        kind: "invoice" as const,
+        source: "invoice" as const,
+        subtitle: invoice.dueDate
+          ? `Vence em ${new Date(invoice.dueDate).toLocaleDateString("pt-BR")}`
+          : formatInvoiceLabel(invoice.month, invoice.year),
+      }))
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+  }, [selectedMonthOpenInvoices]);
+
+  const projectedMonthIncomeTotal = useMemo(() => {
+    return projectedMonthIncomeEntries.reduce((sum, item) => sum + item.amount, 0);
+  }, [projectedMonthIncomeEntries]);
+
+  const projectedMonthCashExpensesTotal = useMemo(() => {
+    return projectedMonthCashExpenseEntries.reduce((sum, item) => sum + item.amount, 0);
+  }, [projectedMonthCashExpenseEntries]);
+
+  const projectedMonthInvoiceTotal = useMemo(() => {
+    return projectedMonthInvoiceEntries.reduce((sum, item) => sum + item.amount, 0);
+  }, [projectedMonthInvoiceEntries]);
+
+  const projectedMonthClosingBalance = useMemo(() => {
+    return (
+      currentAccountsBalance +
+      projectedMonthIncomeTotal -
+      projectedMonthCashExpensesTotal -
+      projectedMonthInvoiceTotal
+    );
+  }, [
+    currentAccountsBalance,
+    projectedMonthCashExpensesTotal,
+    projectedMonthIncomeTotal,
+    projectedMonthInvoiceTotal,
+  ]);
+
+  const projectedMonthAgenda = useMemo(() => {
+    const entries = [
+      ...projectedMonthIncomeEntries.map((item) => ({
+        ...item,
+        tone: "positive" as const,
+      })),
+      ...projectedMonthCashExpenseEntries.map((item) => ({
+        ...item,
+        tone: "negative" as const,
+      })),
+      ...projectedMonthInvoiceEntries.map((item) => ({
+        ...item,
+        tone: "negative" as const,
+      })),
+    ].sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    let runningBalance = currentAccountsBalance;
+
+    return entries.map((item) => {
+      if (item.kind === "income") {
+        runningBalance += item.amount;
+      } else {
+        runningBalance -= item.amount;
+      }
+
+      return {
+        ...item,
+        projectedBalanceAfter: runningBalance,
+      };
+    });
+  }, [
+    currentAccountsBalance,
+    projectedMonthCashExpenseEntries,
+    projectedMonthIncomeEntries,
+    projectedMonthInvoiceEntries,
+  ]);
+
+  const projectedMonthSummary = useMemo(() => {
+    if (projectedMonthClosingBalance < 0) {
+      return {
+        tone: "danger" as const,
+        title: "Mês fecha no vermelho",
+        message: `Em ${formatMonthYear(selectedDate)}, sua sobra projetada fica em ${formatCurrency(projectedMonthClosingBalance)}.`,
+      };
+    }
+
+    if (projectedMonthClosingBalance <= 300) {
+      return {
+        tone: "warning" as const,
+        title: "Mês fecha apertado",
+        message: `Depois dos compromissos de ${formatMonthYear(selectedDate)}, sua margem projetada é de ${formatCurrency(projectedMonthClosingBalance)}.`,
+      };
+    }
+
+    return {
+      tone: "success" as const,
+      title: "Mês viável",
+      message: `Em ${formatMonthYear(selectedDate)}, sua sobra projetada é de ${formatCurrency(projectedMonthClosingBalance)}.`,
+    };
+  }, [projectedMonthClosingBalance, selectedDate]);
 
   const monthlyProjectedBalance = useMemo(() => {
     return (
@@ -4850,6 +5041,154 @@ const dataHealthSummary = useMemo(() => {
             </div>
           </div>
         </header>
+
+
+        <section className="app-card">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Fechamento projetado</p>
+              <h2 className="mt-1 text-lg font-bold text-slate-900">Como {formatMonthYear(selectedDate)} deve fechar</h2>
+            </div>
+            <span
+              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                projectedMonthSummary.tone === "danger"
+                  ? "bg-rose-100 text-rose-700"
+                  : projectedMonthSummary.tone === "warning"
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-emerald-100 text-emerald-700"
+              }`}
+            >
+              {projectedMonthSummary.title}
+            </span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <div className="app-card-soft p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo inicial</p>
+              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
+            </div>
+
+            <div className="app-card-soft p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Entradas previstas</p>
+              <p className="mt-2 text-xl font-bold text-emerald-600 md:text-2xl">{formatCurrency(projectedMonthIncomeTotal)}</p>
+            </div>
+
+            <div className="app-card-soft p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saídas em conta</p>
+              <p className="mt-2 text-xl font-bold text-rose-600 md:text-2xl">{formatCurrency(projectedMonthCashExpensesTotal)}</p>
+            </div>
+
+            <div className="app-card-soft p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas do mês</p>
+              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(projectedMonthInvoiceTotal)}</p>
+            </div>
+
+            <div className="app-card-soft p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Sobra projetada</p>
+              <p className={`mt-2 text-xl font-bold md:text-2xl ${projectedMonthClosingBalance >= 0 ? "text-sky-700" : "app-value-negative"}`}>{formatCurrency(projectedMonthClosingBalance)}</p>
+            </div>
+          </div>
+
+          <div
+            className={`mt-4 rounded-2xl border px-4 py-4 ${
+              projectedMonthSummary.tone === "danger"
+                ? "border-rose-200 bg-rose-50"
+                : projectedMonthSummary.tone === "warning"
+                ? "border-amber-200 bg-amber-50"
+                : "border-emerald-200 bg-emerald-50"
+            }`}
+          >
+            <p
+              className={`text-sm font-semibold ${
+                projectedMonthSummary.tone === "danger"
+                  ? "text-rose-900"
+                  : projectedMonthSummary.tone === "warning"
+                  ? "text-amber-900"
+                  : "text-emerald-900"
+              }`}
+            >
+              {projectedMonthSummary.title}
+            </p>
+            <p
+              className={`mt-1 text-sm ${
+                projectedMonthSummary.tone === "danger"
+                  ? "text-rose-800"
+                  : projectedMonthSummary.tone === "warning"
+                  ? "text-amber-800"
+                  : "text-emerald-800"
+              }`}
+            >
+              {projectedMonthSummary.message}
+            </p>
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Agenda financeira</p>
+                <h3 className="mt-1 text-base font-bold text-slate-900">O que entra e vence em {formatMonthYear(selectedDate)}</h3>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                {projectedMonthAgenda.length} item(ns)
+              </span>
+            </div>
+
+            {projectedMonthAgenda.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
+                Ainda não há entradas, contas ou faturas previstas em {formatMonthYear(selectedDate)}.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {projectedMonthAgenda.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-slate-100 bg-white px-4 py-4"
+                  >
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                              item.kind === "income"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : item.kind === "invoice"
+                                ? "bg-violet-100 text-violet-700"
+                                : "bg-rose-100 text-rose-700"
+                            }`}
+                          >
+                            {item.kind === "income"
+                              ? "Entrada"
+                              : item.kind === "invoice"
+                              ? "Fatura"
+                              : "Saída"}
+                          </span>
+                          {item.source === "recurring" && (
+                            <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
+                              Recorrência
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {item.date.toLocaleDateString("pt-BR")}
+                          {"subtitle" in item && item.subtitle ? ` • ${item.subtitle}` : ""}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Saldo projetado após este item: {formatCurrency(item.projectedBalanceAfter)}
+                        </p>
+                      </div>
+
+                      <p className={`text-sm font-bold md:text-base ${item.tone === "positive" ? "text-emerald-600" : "text-rose-600"}`}>
+                        {item.tone === "positive" ? "+ " : "- "}
+                        {formatCurrency(item.amount)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
 
         {nextIncomeForecast ? (
           <section className="app-card">

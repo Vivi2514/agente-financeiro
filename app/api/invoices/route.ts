@@ -2,6 +2,18 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/current-user";
 
+function getInvoiceDueDate(year: number, month: number, dueDay?: number | null) {
+  if (!dueDay || Number.isNaN(Number(dueDay))) {
+    return null;
+  }
+
+  // A fatura do mês de referência é paga no mês seguinte.
+  // Ex.: fatura 04/2026 com vencimento dia 5 => dueDate = 2026-05-05
+  const dueDate = new Date(year, month, Number(dueDay));
+
+  return dueDate.toISOString().slice(0, 10);
+}
+
 export async function GET() {
   try {
     const user = await requireCurrentUser();
@@ -28,6 +40,7 @@ export async function GET() {
       year: invoice.year,
       total: Number(invoice.total ?? 0),
       status: invoice.status,
+      dueDate: getInvoiceDueDate(invoice.year, invoice.month, invoice.card?.dueDay),
       paidAt: invoice.paidAt,
       paidFromAccountId: invoice.paidFromAccountId,
       createdAt: invoice.createdAt,
