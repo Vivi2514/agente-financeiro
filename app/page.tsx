@@ -4378,7 +4378,7 @@ const dataHealthSummary = useMemo(() => {
                 type="button"
                 onClick={confirmDeleteRecurring}
                 disabled={recurringActionId === deleteConfirm.id}
-                className="rounded-2xl bg-rose-600 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="app-button-danger disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {recurringActionId === deleteConfirm.id ? "Excluindo..." : "Excluir recorrência"}
               </button>
@@ -4421,7 +4421,7 @@ const dataHealthSummary = useMemo(() => {
 
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado do mês</p>
-              <p className={`mt-2 text-xl font-bold md:text-2xl ${balanceMonth >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatCurrency(balanceMonth)}</p>
+              <p className={`mt-2 text-xl font-bold md:text-2xl ${balanceMonth >= 0 ? "app-value-positive" : "app-value-negative"}`}>{formatCurrency(balanceMonth)}</p>
             </div>
 
             <div className="app-card-soft p-4">
@@ -4431,7 +4431,7 @@ const dataHealthSummary = useMemo(() => {
 
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gasto seguro</p>
-              <p className={`mt-2 text-xl font-bold md:text-2xl ${spendingCapacitySummary.extraSafeSpend > 0 ? "text-sky-700" : "text-rose-600"}`}>{formatCurrency(spendingCapacitySummary.extraSafeSpend)}</p>
+              <p className={`mt-2 text-xl font-bold md:text-2xl ${spendingCapacitySummary.extraSafeSpend > 0 ? "text-sky-700" : "app-value-negative"}`}>{formatCurrency(spendingCapacitySummary.extraSafeSpend)}</p>
             </div>
           </div>
         </header>
@@ -4483,25 +4483,25 @@ const dataHealthSummary = useMemo(() => {
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="app-card-soft px-4 py-4">
               <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{assistantSummary.focusLabel}</p><span className="app-badge-neutral">Prioridade 1</span></div>
               <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.action}</p>
               <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.actionDetail}</p>
               <p className="mt-2 text-xs font-medium text-slate-700">{assistantSummary.actionReason}</p>
-              <div className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <div className="mt-2 app-card-soft px-3 py-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Impacto esperado</p>
                 <p className="mt-1 text-xs leading-5 text-slate-600">{assistantSummary.actionImpact}</p>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+            <div className="app-card px-4 py-4">
               <p className="text-sm font-semibold text-slate-900">Limite de hoje</p>
               <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.dailyLimit}</p>
               <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.dailyLimitSupport}</p>
             </div>
           </div>
 
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-4">
+          <div className="mt-3 app-card px-4 py-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-slate-900">Depois da prioridade 1</p>
               <span className="text-xs text-slate-500">Só o que merece atenção depois</span>
@@ -4536,7 +4536,7 @@ const dataHealthSummary = useMemo(() => {
           </div>
 
           {assistantSummary.secondaryAlert ? (
-            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="mt-3 app-card-soft px-4 py-4">
               <p className="text-sm font-semibold text-slate-900">Contexto rápido</p>
               <p className="mt-1 text-sm text-slate-600">{assistantSummary.secondaryAlert}</p>
               <p className="mt-1 text-xs leading-5 text-slate-500">
