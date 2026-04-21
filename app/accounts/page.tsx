@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 type Account = {
@@ -204,13 +205,26 @@ export default function AccountsPage() {
     <main className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="mx-auto max-w-6xl space-y-6">
         <header className="rounded-3xl bg-white p-6 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">Contas e cartões</p>
-          <h1 className="text-3xl font-bold text-slate-900">
-            Gerenciar contas e cartões
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Cadastre suas contas bancárias e cartões de crédito
-          </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500">
+                Contas e cartões
+              </p>
+              <h1 className="text-3xl font-bold text-slate-900">
+                Gerenciar contas e cartões
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Cadastre suas contas bancárias e cartões de crédito
+              </p>
+            </div>
+
+            <Link
+              href="/"
+              className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              ← Voltar para home
+            </Link>
+          </div>
         </header>
 
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -267,7 +281,8 @@ export default function AccountsPage() {
                     >
                       <p className="font-semibold text-slate-900">{acc.name}</p>
                       <p className="text-sm text-slate-500">
-                        {acc.type || "Conta"} • {formatCurrency(Number(acc.balance))}
+                        {acc.type || "Conta"} •{" "}
+                        {formatCurrency(Number(acc.balance))}
                       </p>
                     </div>
                   ))}
@@ -330,7 +345,8 @@ export default function AccountsPage() {
                 <div className="mt-3 space-y-3">
                   {cardSummaries.map((card) => {
                     const isDanger = card.usagePercent >= 90;
-                    const isWarning = card.usagePercent >= 70 && card.usagePercent < 90;
+                    const isWarning =
+                      card.usagePercent >= 70 && card.usagePercent < 90;
 
                     return (
                       <div
@@ -339,7 +355,9 @@ export default function AccountsPage() {
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div>
-                            <p className="font-semibold text-slate-900">{card.name}</p>
+                            <p className="font-semibold text-slate-900">
+                              {card.name}
+                            </p>
                             <p className="text-sm text-slate-500">
                               Fecha dia {card.closingDay} • Vence dia {card.dueDay}
                             </p>
