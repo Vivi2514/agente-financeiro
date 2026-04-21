@@ -481,6 +481,15 @@ function getTransactionActualAmount(transaction: Transaction) {
   );
 }
 
+function isRealCashFlowTransaction(transaction?: Transaction | null) {
+  if (!transaction) return false;
+  if (transaction.status === "PLANNED") return false;
+  if (isAdjustmentTransaction(transaction)) return false;
+
+  const paymentMethod = normalizeComparableText(transaction.paymentMethod);
+  return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
+}
+
 function getDateDifferenceInDays(expectedDate?: string | null, actualDate?: string | null) {
   if (!expectedDate || !actualDate) return 0;
 
@@ -1143,6 +1152,56 @@ export default function DashboardPage() {
   const analyticalTransactions = useMemo(() => {
     return realizedMonthTransactions;
   }, [realizedMonthTransactions]);
+
+  const realCashFlowMonthTransactions = useMemo(() => {
+    return realizedMonthTransactions.filter((transaction) =>
+      isRealCashFlowTransaction(transaction)
+    );
+  }, [realizedMonthTransactions]);
+
+  const realCashFlowExpenses = useMemo(() => {
+    return realCashFlowMonthTransactions.filter((transaction) =>
+      isExpenseType(transaction.type)
+    );
+  }, [realCashFlowMonthTransactions]);
+
+  const realCashFlowIncomes = useMemo(() => {
+    return realCashFlowMonthTransactions.filter((transaction) =>
+      isIncomeType(transaction.type)
+    );
+  }, [realCashFlowMonthTransactions]);
+
+  const realCashFlowExpensesTotal = useMemo(() => {
+    return realCashFlowExpenses.reduce(
+      (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
+      0
+    );
+  }, [realCashFlowExpenses]);
+
+  const realCashFlowIncomesTotal = useMemo(() => {
+    return realCashFlowIncomes.reduce(
+      (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
+      0
+    );
+  }, [realCashFlowIncomes]);
+
+  const realBalanceMonth = useMemo(() => {
+    return realCashFlowIncomesTotal - realCashFlowExpensesTotal;
+  }, [realCashFlowExpensesTotal, realCashFlowIncomesTotal]);
+
+  const creditCardMonthTransactions = useMemo(() => {
+    return realizedMonthTransactions.filter((transaction) => {
+      if (isAdjustmentTransaction(transaction)) return false;
+      return normalizeComparableText(transaction.paymentMethod) === "credit_card";
+    });
+  }, [realizedMonthTransactions]);
+
+  const selectedMonthCreditPurchasesTotal = useMemo(() => {
+    return creditCardMonthTransactions.reduce(
+      (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
+      0
+    );
+  }, [creditCardMonthTransactions]);
 
   const filteredExpenses = useMemo(() => {
     return analyticalTransactions.filter((transaction) =>
@@ -4374,11 +4433,11 @@ const dataHealthSummary = useMemo(() => {
       };
     }
 
-    if (balanceMonth < 0) {
+    if (realBalanceMonth < 0) {
       return {
         tone: "warning" as const,
-        title: "Resultado do mês negativo",
-        summary: `O mês está fechando em ${formatCurrency(balanceMonth)} até agora.`,
+        title: "Resultado real do mês negativo",
+        summary: `Seu fluxo real do mês está em ${formatCurrency(realBalanceMonth)} até agora.`,
       };
     }
 
@@ -4388,7 +4447,7 @@ const dataHealthSummary = useMemo(() => {
       summary: `Você ainda tem ${formatCurrency(spendingCapacitySummary.extraSafeSpend)} de margem segura neste mês.`,
     };
   }, [
-    balanceMonth,
+    realBalanceMonth,
     currentAccountsBalance,
     openInvoicesTotal,
     projectedBalanceReal,
@@ -4461,13 +4520,16 @@ const dataHealthSummary = useMemo(() => {
       ? filteredTransactions.filter(
           (transaction) =>
             transaction.date?.slice(0, 10) === todayKey &&
-            !isAdjustmentTransaction(transaction)
+            isRealCashFlowTransaction(transaction)
         )
       : [];
 
     const spentToday = todayTransactions
       .filter((transaction) => isExpenseType(transaction.type))
-      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+      .reduce(
+        (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
+        0
+      );
 
     const hasTransactionsToday = todayTransactions.length > 0;
     const hasNoBalance = currentAccountsBalance <= 0;
@@ -4514,8 +4576,8 @@ const dataHealthSummary = useMemo(() => {
       mainCategory
         ? `${mainCategoryCategory} acima do ritmo em ${formatCurrency(mainCategoryPaceDifference)}`
         : null,
-      !isCurrentSelectedMonth && balanceMonth !== 0
-        ? `Resultado parcial do mês em ${formatCurrency(balanceMonth)}`
+      !isCurrentSelectedMonth && realBalanceMonth !== 0
+        ? `Resultado real do mês em ${formatCurrency(realBalanceMonth)}`
         : null,
     ].filter(Boolean) as string[];
 
@@ -4651,7 +4713,7 @@ const dataHealthSummary = useMemo(() => {
       secondaryAlert: quickContext[0] || null,
     };
   }, [
-    balanceMonth,
+    realBalanceMonth,
     currentAccountsBalance,
     filteredTransactions,
     monthClaritySummary,
@@ -4762,13 +4824,21 @@ const dataHealthSummary = useMemo(() => {
             </div>
 
             <div className="app-card-soft p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado do mês</p>
-              <p className={`mt-2 text-xl font-bold md:text-2xl ${balanceMonth >= 0 ? "app-value-positive" : "app-value-negative"}`}>{formatCurrency(balanceMonth)}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado real do mês</p>
+              <p className={`mt-2 text-xl font-bold md:text-2xl ${realBalanceMonth >= 0 ? "app-value-positive" : "app-value-negative"}`}>{formatCurrency(realBalanceMonth)}</p>
+              <p className="mt-2 text-xs text-slate-500">
+                Considera só Pix, débito, dinheiro e transferências.
+              </p>
             </div>
 
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
               <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(openInvoicesTotal)}</p>
+              {selectedMonthCreditPurchasesTotal > 0 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Compras no crédito neste mês: {formatCurrency(selectedMonthCreditPurchasesTotal)}
+                </p>
+              )}
             </div>
 
             <div className="app-card-soft p-4">
