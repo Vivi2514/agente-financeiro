@@ -117,6 +117,12 @@ function formatCurrencyInput(value: string) {
   });
 }
 
+function getMonthInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`
+}
+
 function getPaymentMethodLabel(method?: string | null) {
   switch (method) {
     case "cash":
@@ -213,6 +219,16 @@ function parseFilterDate(dateValue?: string) {
   return new Date(year, month - 1, day);
 }
 
+function formatMonthLabel(monthValue: string) {
+  const [year, month] = monthValue.split("-").map(Number);
+  if (!year || !month) return "Mês atual";
+
+  return new Date(year, month - 1, 1).toLocaleDateString("pt-BR", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
 function getFrequencyLabel(isFixed?: boolean | null) {
   return isFixed ? "Fixa" : "Variável";
 }
@@ -228,6 +244,11 @@ function isAdjustmentTransaction(transaction?: Transaction | null) {
     normalizedTitle === "ajuste inicial do cartao" ||
     normalizedTitle === "ajuste inicial do cartão"
   );
+}
+
+function getBaseInstallmentTitle(title?: string | null) {
+  if (!title) return "";
+  return title.replace(/\s*\(\d+\s*\/\s*\d+\)$/, "").trim();
 }
 
 
@@ -260,6 +281,9 @@ export default function TransactionsPage() {
     const localDate = new Date(now.getTime() - offset * 60 * 1000);
     return localDate.toISOString().slice(0, 10);
   });
+  const [selectedMonthValue, setSelectedMonthValue] = useState(() =>
+    getMonthInputValue(new Date())
+  );
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<"" | "income" | "expense">("");
@@ -272,10 +296,10 @@ export default function TransactionsPage() {
   >("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const [sortBy, setSortBy] = useState<"date" | "amount" | "title">("date");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const categoryOptions =
     type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
@@ -479,6 +503,20 @@ export default function TransactionsPage() {
         if (filterInvoiceStatus === "paid" && !isPaidInvoice) return false;
         if (filterInvoiceStatus === "open" && !isOpenInvoice) return false;
 
+        if (selectedMonthValue) {
+          const [selectedYear, selectedMonth] = selectedMonthValue
+            .split("-")
+            .map(Number);
+
+          if (
+            !transactionDateOnly ||
+            transactionDateOnly.getFullYear() != selectedYear ||
+            transactionDateOnly.getMonth() + 1 != selectedMonth
+          ) {
+            return false;
+          }
+        }
+
         if (filterDateFrom) {
           const fromDate = parseFilterDate(filterDateFrom);
           if (!transactionDateOnly || !fromDate || transactionDateOnly < fromDate) {
@@ -526,6 +564,7 @@ export default function TransactionsPage() {
     accounts,
     cards,
     searchTerm,
+    selectedMonthValue,
     filterType,
     filterCategory,
     filterPaymentMethod,
@@ -538,8 +577,156 @@ export default function TransactionsPage() {
     sortOrder,
   ]);
 
+  const hasActiveAdvancedFilters = useMemo(() => {
+    return Boolean(
+      filterType ||
+        filterCategory ||
+        filterPaymentMethod ||
+        filterAccountId ||
+        filterCardId ||
+        filterInvoiceStatus ||
+        filterDateFrom ||
+        filterDateTo
+    );
+  }, [
+    filterType,
+    filterCategory,
+    filterPaymentMethod,
+    filterAccountId,
+    filterCardId,
+    filterInvoiceStatus,
+    filterDateFrom,
+    filterDateTo,
+  ]);
+
+  const purchaseGroupSummaries = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        purchaseGroupId: string;
+        transactions: Transaction[];
+        firstTransaction: Transaction;
+        totalAmount: number;
+        installmentTotal: number;
+        installmentValue: number;
+        baseTitle: string;
+      }
+    >();
+
+    const sortedTransactions = [...transactions].sort((a, b) => {
+      const installmentA = Number(a.installmentNumber || 0);
+      const installmentB = Number(b.installmentNumber || 0);
+
+      if (installmentA !== installmentB) {
+        return installmentA - installmentB;
+      }
+
+      const dateA = new Date(a.date || a.createdAt || 0).getTime();
+      const dateB = new Date(b.date || b.createdAt || 0).getTime();
+      return dateA - dateB;
+    });
+
+    sortedTransactions.forEach((transaction) => {
+      if (!transaction.purchaseGroupId) return;
+
+      const existing = grouped.get(transaction.purchaseGroupId);
+
+      if (!existing) {
+        grouped.set(transaction.purchaseGroupId, {
+          purchaseGroupId: transaction.purchaseGroupId,
+          transactions: [transaction],
+          firstTransaction: transaction,
+          totalAmount: Number(transaction.amount || 0),
+          installmentTotal: Number(transaction.installmentTotal || 1),
+          installmentValue: Number(transaction.amount || 0),
+          baseTitle: getBaseInstallmentTitle(transaction.title),
+        });
+        return;
+      }
+
+      existing.transactions.push(transaction);
+      existing.totalAmount += Number(transaction.amount || 0);
+
+      const currentInstallmentNumber = Number(transaction.installmentNumber || 0);
+      const firstInstallmentNumber = Number(
+        existing.firstTransaction.installmentNumber || 0
+      );
+      const currentDate = new Date(transaction.date || transaction.createdAt || 0).getTime();
+      const firstDate = new Date(
+        existing.firstTransaction.date || existing.firstTransaction.createdAt || 0
+      ).getTime();
+
+      if (
+        currentInstallmentNumber < firstInstallmentNumber ||
+        (currentInstallmentNumber === firstInstallmentNumber && currentDate < firstDate)
+      ) {
+        existing.firstTransaction = transaction;
+      }
+
+      if (Number(transaction.installmentTotal || 0) > existing.installmentTotal) {
+        existing.installmentTotal = Number(transaction.installmentTotal || 1);
+      }
+    });
+
+    return grouped;
+  }, [transactions]);
+
+  const displayedTransactions = useMemo(() => {
+    const filteredIds = new Set(filteredTransactions.map((transaction) => transaction.id));
+
+    return filteredTransactions.reduce<
+      Array<{
+        transaction: Transaction;
+        groupedPurchase:
+          | {
+              totalAmount: number;
+              installmentTotal: number;
+              installmentValue: number;
+              baseTitle: string;
+            }
+          | null;
+      }>
+    >((acc, transaction) => {
+      if (!transaction.purchaseGroupId) {
+        acc.push({ transaction, groupedPurchase: null });
+        return acc;
+      }
+
+      const summary = purchaseGroupSummaries.get(transaction.purchaseGroupId);
+
+      if (!summary) {
+        acc.push({ transaction, groupedPurchase: null });
+        return acc;
+      }
+
+      const firstTransactionIsVisible = filteredIds.has(summary.firstTransaction.id);
+
+      if (!firstTransactionIsVisible) {
+        acc.push({ transaction, groupedPurchase: null });
+        return acc;
+      }
+
+      if (transaction.id !== summary.firstTransaction.id) {
+        return acc;
+      }
+
+      acc.push({
+        transaction,
+        groupedPurchase: {
+          totalAmount: summary.totalAmount,
+          installmentTotal: summary.installmentTotal,
+          installmentValue: summary.installmentValue,
+          baseTitle: summary.baseTitle,
+        },
+      });
+
+      return acc;
+    }, []);
+  }, [filteredTransactions, purchaseGroupSummaries]);
+
   function clearFilters() {
     setSearchTerm("");
+    setSelectedMonthValue(getMonthInputValue(new Date()));
     setFilterType("");
     setFilterCategory("");
     setFilterPaymentMethod("");
@@ -550,30 +737,21 @@ export default function TransactionsPage() {
     setFilterDateTo("");
   }
 
-  function applyTodayFilter() {
-    const today = getTodayString();
-    setFilterDateFrom(today);
-    setFilterDateTo(today);
+  function changeSelectedMonth(direction: "prev" | "next") {
+    const [year, month] = selectedMonthValue.split("-").map(Number);
+    const baseDate = new Date(year, month - 1, 1);
+
+    if (direction === "prev") {
+      baseDate.setMonth(baseDate.getMonth() - 1);
+    } else {
+      baseDate.setMonth(baseDate.getMonth() + 1);
+    }
+
+    setSelectedMonthValue(getMonthInputValue(baseDate));
   }
 
-  function applyLast7DaysFilter() {
-    setFilterDateFrom(addDaysToToday(-6));
-    setFilterDateTo(getTodayString());
-  }
-
-  function applyLast30DaysFilter() {
-    setFilterDateFrom(addDaysToToday(-29));
-    setFilterDateTo(getTodayString());
-  }
-
-  function applyCurrentMonthFilter() {
-    setFilterDateFrom(getFirstDayOfCurrentMonth());
-    setFilterDateTo(getTodayString());
-  }
-
-  function clearPeriodFilter() {
-    setFilterDateFrom("");
-    setFilterDateTo("");
+  function goToCurrentMonth() {
+    setSelectedMonthValue(getMonthInputValue(new Date()));
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -953,14 +1131,14 @@ export default function TransactionsPage() {
                 Filtros e busca
               </h2>
               <p className="text-sm text-slate-500">
-                Busca simples no dia a dia e filtros avançados só quando você realmente precisar.
+                Primeiro escolha o mês e use a busca. Os filtros mais detalhados ficam escondidos até você precisar.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowAdvancedFilters((prev) => !prev)}
+                onClick={() => setShowAdvancedFilters((current) => !current)}
                 className="app-button-secondary"
               >
                 {showAdvancedFilters ? "Ocultar filtros avançados" : "Filtros avançados"}
@@ -970,16 +1148,16 @@ export default function TransactionsPage() {
                 type="button"
                 onClick={() => {
                   clearFilters();
-                  clearPeriodFilter();
+                  setShowAdvancedFilters(false);
                 }}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 Limpar tudo
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
             <input
               type="text"
               value={searchTerm}
@@ -1006,182 +1184,133 @@ export default function TransactionsPage() {
               className="app-input"
             >
               <option value="desc">Mais recentes primeiro</option>
-              <option value="asc">Mais antigos primeiro</option>
+              <option value="asc">Mais antigas primeiro</option>
             </select>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium text-slate-600">Mês</span>
+
             <button
               type="button"
-              onClick={applyTodayFilter}
-              className="app-button-secondary"
+              onClick={() => changeSelectedMonth("prev")}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
-              Hoje
+              ←
+            </button>
+
+            <input
+              type="month"
+              value={selectedMonthValue}
+              onChange={(e) => setSelectedMonthValue(e.target.value)}
+              className="app-input max-w-[180px]"
+            />
+            <button
+              type="button"
+              onClick={() => changeSelectedMonth("next")}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              →
             </button>
 
             <button
               type="button"
-              onClick={applyLast7DaysFilter}
+              onClick={goToCurrentMonth}
               className="app-button-secondary"
             >
-              7 dias
+              Mês atual
             </button>
-
-            <button
-              type="button"
-              onClick={applyLast30DaysFilter}
-              className="app-button-secondary"
-            >
-              30 dias
-            </button>
-
-            <button
-              type="button"
-              onClick={applyCurrentMonthFilter}
-              className="app-button-secondary"
-            >
-              Este mês
-            </button>
-
-            {(filterDateFrom || filterDateTo) && (
-              <button
-                type="button"
-                onClick={clearPeriodFilter}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Limpar período
-              </button>
-            )}
           </div>
 
           {showAdvancedFilters && (
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-              <div className="mb-3">
-                <p className="text-sm font-semibold text-slate-700">
-                  Filtros avançados
-                </p>
-                <p className="text-xs text-slate-500">
-                  Use esses filtros quando quiser refinar mais a busca.
-                </p>
-              </div>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <select
+                value={filterType}
+                onChange={(e) =>
+                  setFilterType(e.target.value as "" | "income" | "expense")
+                }
+                className="app-input"
+              >
+                <option value="">Todos os tipos</option>
+                <option value="income">Entrada</option>
+                <option value="expense">Saída</option>
+              </select>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <select
-                  value={filterType}
-                  onChange={(e) =>
-                    setFilterType(e.target.value as "" | "income" | "expense")
-                  }
-                  className="app-input"
-                >
-                  <option value="">Todos os tipos</option>
-                  <option value="income">Entrada</option>
-                  <option value="expense">Saída</option>
-                </select>
+              <select
+                value={filterInvoiceStatus}
+                onChange={(e) =>
+                  setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")
+                }
+                className="app-input"
+              >
+                <option value="">Todos os status</option>
+                <option value="open">Abertas</option>
+                <option value="paid">Protegidas / Fatura paga</option>
+              </select>
 
-                <select
-                  value={filterInvoiceStatus}
-                  onChange={(e) =>
-                    setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")
-                  }
-                  className="app-input"
-                >
-                  <option value="">Todos os status</option>
-                  <option value="open">Abertas</option>
-                  <option value="paid">Protegidas / Fatura paga</option>
-                </select>
+              <select
+                value={filterCategory}
+                onChange={(e) => setFilterCategory(e.target.value)}
+                className="app-input"
+              >
+                <option value="">Todas as categorias</option>
+                {allCategoryOptions.map((cat) => (
+                  <option key={cat.value} value={cat.value}>
+                    {cat.label}
+                  </option>
+                ))}
+              </select>
 
-                <select
-                  value={filterCategory}
-                  onChange={(e) => setFilterCategory(e.target.value)}
-                  className="app-input"
-                >
-                  <option value="">Todas as categorias</option>
-                  {allCategoryOptions.map((cat) => (
-                    <option key={cat.value} value={cat.value}>
-                      {cat.label}
-                    </option>
-                  ))}
-                </select>
+              <select
+                value={filterPaymentMethod}
+                onChange={(e) => setFilterPaymentMethod(e.target.value)}
+                className="app-input"
+              >
+                <option value="">Todas as formas</option>
+                <option value="credit_card">Cartão de crédito</option>
+                <option value="debit_card">Cartão de débito</option>
+                <option value="pix">Pix</option>
+                <option value="cash">Dinheiro</option>
+                <option value="bank_transfer">Transferência</option>
+                <option value="boleto">Boleto</option>
+                <option value="voucher">Voucher / Vale alimentação</option>
+              </select>
 
-                <select
-                  value={filterPaymentMethod}
-                  onChange={(e) => setFilterPaymentMethod(e.target.value)}
-                  className="app-input"
-                >
-                  <option value="">Todas as formas</option>
-                  <option value="credit_card">Cartão de crédito</option>
-                  <option value="debit_card">Cartão de débito</option>
-                  <option value="pix">Pix</option>
-                  <option value="cash">Dinheiro</option>
-                  <option value="bank_transfer">Transferência</option>
-                  <option value="boleto">Boleto</option>
-                  <option value="voucher">Voucher / Vale alimentação</option>
-                </select>
+              <select
+                value={filterAccountId}
+                onChange={(e) => setFilterAccountId(e.target.value)}
+                className="app-input"
+              >
+                <option value="">Todas as contas</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
 
-                <select
-                  value={filterAccountId}
-                  onChange={(e) => setFilterAccountId(e.target.value)}
-                  className="app-input"
-                >
-                  <option value="">Todas as contas</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
+              <select
+                value={filterCardId}
+                onChange={(e) => setFilterCardId(e.target.value)}
+                className="app-input"
+              >
+                <option value="">Todos os cartões</option>
+                {cards.map((card) => (
+                  <option key={card.id} value={card.id}>
+                    {card.name}
+                  </option>
+                ))}
+              </select>
 
-                <select
-                  value={filterCardId}
-                  onChange={(e) => setFilterCardId(e.target.value)}
-                  className="app-input"
-                >
-                  <option value="">Todos os cartões</option>
-                  {cards.map((card) => (
-                    <option key={card.id} value={card.id}>
-                      {card.name}
-                    </option>
-                  ))}
-                </select>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-slate-600">De</label>
-                  <input
-                    type="date"
-                    value={filterDateFrom}
-                    onChange={(e) => setFilterDateFrom(e.target.value)}
-                    className="app-input"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-slate-600">Até</label>
-                  <input
-                    type="date"
-                    value={filterDateTo}
-                    onChange={(e) => setFilterDateTo(e.target.value)}
-                    className="app-input"
-                  />
-                </div>
-              </div>
             </div>
           )}
 
           <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-500">
             <span className="rounded-full bg-slate-100 px-3 py-1">
-              {filteredTransactions.length} transação(ões) encontrada(s)
+              {displayedTransactions.length} transação(ões) encontrada(s)
             </span>
-
-            {(searchTerm ||
-              filterType ||
-              filterCategory ||
-              filterPaymentMethod ||
-              filterAccountId ||
-              filterCardId ||
-              filterInvoiceStatus ||
-              filterDateFrom ||
-              filterDateTo) && (
-              <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-700">
+            {hasActiveAdvancedFilters && (
+              <span className="rounded-full bg-sky-100 px-3 py-1 text-sky-700">
                 Filtros ativos
               </span>
             )}
@@ -1459,13 +1588,13 @@ export default function TransactionsPage() {
               <div className="py-10 text-center text-slate-500">
                 Carregando transações...
               </div>
-            ) : filteredTransactions.length === 0 ? (
+            ) : displayedTransactions.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-slate-500">
                 Nenhuma transação encontrada com os filtros atuais.
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredTransactions.map((transaction) => {
+                {displayedTransactions.map(({ transaction, groupedPurchase }) => {
                   const accountName =
                     transaction.account?.name ||
                     accounts.find((account) => account.id === transaction.accountId)
@@ -1483,6 +1612,7 @@ export default function TransactionsPage() {
                   const isInstallment = Boolean(transaction.purchaseGroupId);
                   const isAdjustment = isAdjustmentTransaction(transaction);
                   const isEditing = editingId === transaction.id;
+                  const isGroupedPurchase = Boolean(groupedPurchase);
                   const editCategoryOptions =
                     editForm?.type === "income"
                       ? INCOME_CATEGORIES
@@ -1771,7 +1901,7 @@ export default function TransactionsPage() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <h3 className="truncate text-base font-bold text-slate-900">
-                                {transaction.title}
+                                {isGroupedPurchase ? groupedPurchase?.baseTitle || transaction.title : transaction.title}
                               </h3>
 
                               <span
@@ -1808,7 +1938,9 @@ export default function TransactionsPage() {
 
                               {isInstallment && (
                                 <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
-                                  Parcelado
+                                  {isGroupedPurchase
+                                    ? `Parcelado em ${groupedPurchase?.installmentTotal || transaction.installmentTotal || 1}x`
+                                    : "Parcelado"}
                                 </span>
                               )}
                             </div>
@@ -1833,6 +1965,13 @@ export default function TransactionsPage() {
                               {accountName && <p>Conta: {accountName}</p>}
                               {cardName && <p>Cartão: {cardName}</p>}
 
+                              {isGroupedPurchase && groupedPurchase && (
+                                <p>
+                                  Compra parcelada em {groupedPurchase.installmentTotal}x de{" "}
+                                  {formatCurrency(groupedPurchase.installmentValue)}. As próximas parcelas aparecem quando você navegar para os meses seguintes.
+                                </p>
+                              )}
+
                               <p>
                                 Data:{" "}
                                 {transactionDate
@@ -1844,7 +1983,7 @@ export default function TransactionsPage() {
                             </div>
                           </div>
 
-                          <div className="flex flex-col items-start gap-3 md:items-end">
+                          <div className="flex flex-col items-end gap-3">
                             <p
                               className={`text-lg font-bold ${
                                 normalizedType === "income"
@@ -1853,10 +1992,10 @@ export default function TransactionsPage() {
                               }`}
                             >
                               {normalizedType === "income" ? "+ " : "- "}
-                              {formatCurrency(Number(transaction.amount))}
+                              {formatCurrency(isGroupedPurchase && groupedPurchase ? groupedPurchase.totalAmount : Number(transaction.amount))}
                             </p>
 
-                            <div className="flex flex-wrap gap-2">
+                            <div className="flex flex-wrap justify-end gap-2">
                               {isPaidInvoice ? (
                                 <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500">
                                   Transação protegida
@@ -1866,14 +2005,14 @@ export default function TransactionsPage() {
                                   <button
                                     type="button"
                                     onClick={() => startEditing(transaction)}
-                                    disabled={isInstallment}
+                                    disabled={isInstallment || isGroupedPurchase}
                                     className={`rounded-xl border px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                       isInstallment
                                         ? "border-slate-200 text-slate-400"
                                         : "border-sky-200 text-sky-700 hover:bg-sky-50"
                                     }`}
                                   >
-                                    {isInstallment ? "Parcelado" : "Editar"}
+                                    {isGroupedPurchase ? "Compra parcelada" : isInstallment ? "Parcelado" : "Editar"}
                                   </button>
 
                                   <button
