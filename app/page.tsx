@@ -4369,7 +4369,7 @@ const dataHealthSummary = useMemo(() => {
                 type="button"
                 onClick={closeDeleteConfirm}
                 disabled={recurringActionId === deleteConfirm.id}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancelar
               </button>
@@ -4388,7 +4388,7 @@ const dataHealthSummary = useMemo(() => {
       ) : null}
 
       <div className="mx-auto max-w-3xl space-y-4 md:space-y-6">
-        <header className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
+        <header className="app-card">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-2xl">
               <p className="text-sm font-medium text-slate-500">Início</p>
@@ -4408,35 +4408,35 @@ const dataHealthSummary = useMemo(() => {
                 type="month"
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-base outline-none transition duration-200 placeholder:text-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                className="app-input text-base placeholder:text-slate-300"
               />
             </div>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+            <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo hoje</p>
               <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
             </div>
 
-            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+            <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado do mês</p>
               <p className={`mt-2 text-xl font-bold md:text-2xl ${balanceMonth >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatCurrency(balanceMonth)}</p>
             </div>
 
-            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+            <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
               <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(openInvoicesTotal)}</p>
             </div>
 
-            <div className="rounded-[22px] border border-slate-200/70 bg-slate-50 px-4 py-4">
+            <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gasto seguro</p>
               <p className={`mt-2 text-xl font-bold md:text-2xl ${spendingCapacitySummary.extraSafeSpend > 0 ? "text-sky-700" : "text-rose-600"}`}>{formatCurrency(spendingCapacitySummary.extraSafeSpend)}</p>
             </div>
           </div>
         </header>
 
-        <section className="rounded-[24px] border border-slate-200/70 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:rounded-[28px] md:p-6">
+        <section className="app-card">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Assistente financeiro</p>
@@ -4484,7 +4484,7 @@ const dataHealthSummary = useMemo(() => {
 
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-              <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{assistantSummary.focusLabel}</p><span className="inline-flex rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white">Prioridade 1</span></div>
+              <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{assistantSummary.focusLabel}</p><span className="app-badge-neutral">Prioridade 1</span></div>
               <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.action}</p>
               <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.actionDetail}</p>
               <p className="mt-2 text-xs font-medium text-slate-700">{assistantSummary.actionReason}</p>
@@ -4548,7 +4548,7 @@ const dataHealthSummary = useMemo(() => {
           <div className="mt-4">
             <Link
               href="/intelligence"
-              className="flex w-full items-center justify-between rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+              className="app-button-primary flex w-full items-center justify-between"
             >
               <span>Ver análise completa</span>
               <span>→</span>
@@ -4559,7 +4559,7 @@ const dataHealthSummary = useMemo(() => {
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-2">
           <Link
             href="/transactions"
-            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
           >
             <p className="text-sm font-semibold text-slate-900">Lançar transação</p>
             <p className="mt-1 text-xs text-slate-500">Registrar entradas e saídas.</p>
@@ -4567,7 +4567,7 @@ const dataHealthSummary = useMemo(() => {
 
           <Link
             href="/invoices"
-            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
           >
             <p className="text-sm font-semibold text-slate-900">Cartão de crédito</p>
             <p className="mt-1 text-xs text-slate-500">Ver faturas e limite.</p>
@@ -4575,7 +4575,7 @@ const dataHealthSummary = useMemo(() => {
 
           <Link
             href="/goals"
-            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
           >
             <p className="text-sm font-semibold text-slate-900">Metas e categorias</p>
             <p className="mt-1 text-xs text-slate-500">Acompanhar metas do mês.</p>
@@ -4583,7 +4583,7 @@ const dataHealthSummary = useMemo(() => {
 
           <Link
             href="/intelligence"
-            className="rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
           >
             <p className="text-sm font-semibold text-slate-900">Inteligência financeira</p>
             <p className="mt-1 text-xs text-slate-500">Ver alertas e recomendações.</p>
@@ -4593,7 +4593,7 @@ const dataHealthSummary = useMemo(() => {
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
           <Link
             href="/accounts"
-            className="rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-center text-sm font-semibold text-slate-700 transition duration-200 hover:bg-slate-50"
+            className="app-button-secondary text-center"
           >
             Contas e cartões
           </Link>
@@ -4602,12 +4602,12 @@ const dataHealthSummary = useMemo(() => {
             type="button"
             onClick={handleResetAllData}
             disabled={resettingData}
-            className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3.5 text-sm font-semibold text-rose-700 transition duration-200 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="app-button-danger disabled:cursor-not-allowed disabled:opacity-60"
           >
             {resettingData ? "Resetando..." : "Resetar dados"}
           </button>
 
-          <div className="rounded-[18px] border border-slate-200 bg-white px-4 py-3.5 text-center">
+          <div className="app-button-secondary text-center">
             <LogoutButton />
           </div>
         </section>
