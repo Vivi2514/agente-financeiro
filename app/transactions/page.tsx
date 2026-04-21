@@ -272,6 +272,7 @@ export default function TransactionsPage() {
   >("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const [sortBy, setSortBy] = useState<"date" | "amount" | "title">("date");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
@@ -946,22 +947,53 @@ export default function TransactionsPage() {
         </section>
 
         <section className="app-card">
-          <div className="mb-5">
-            <h2 className="text-xl font-bold text-slate-900">
-              Filtros e busca
-            </h2>
-            <p className="text-sm text-slate-500">
-              Refine as transações por texto, período, categoria, pagamento e status
-            </p>
+          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">
+                Filtros e busca
+              </h2>
+              <p className="text-sm text-slate-500">
+                Busca simples no dia a dia e filtros avançados só quando você realmente precisar.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedFilters((prev) => !prev)}
+                className="app-button-secondary"
+              >
+                {showAdvancedFilters ? "Ocultar filtros avançados" : "Filtros avançados"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  clearFilters();
+                  clearPeriodFilter();
+                }}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Limpar tudo
+              </button>
+            </div>
           </div>
 
-          <div className="mb-4 flex flex-wrap gap-3">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Buscar por título, categoria, conta ou cartão"
+              className="app-input"
+            />
+
             <select
               value={sortBy}
               onChange={(e) =>
                 setSortBy(e.target.value as "date" | "amount" | "title")
               }
-              className="rounded-2xl border border-slate-200 px-4 py-2"
+              className="app-input"
             >
               <option value="date">Ordenar por data</option>
               <option value="amount">Ordenar por valor</option>
@@ -971,14 +1003,14 @@ export default function TransactionsPage() {
             <select
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
-              className="rounded-2xl border border-slate-200 px-4 py-2"
+              className="app-input"
             >
-              <option value="desc">Decrescente</option>
-              <option value="asc">Crescente</option>
+              <option value="desc">Mais recentes primeiro</option>
+              <option value="asc">Mais antigos primeiro</option>
             </select>
           </div>
 
-          <div className="mb-4 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={applyTodayFilter}
@@ -1011,135 +1043,148 @@ export default function TransactionsPage() {
               Este mês
             </button>
 
-            <button
-              type="button"
-              onClick={clearPeriodFilter}
-              className="app-button-secondary"
-            >
-              Limpar período
-            </button>
+            {(filterDateFrom || filterDateTo) && (
+              <button
+                type="button"
+                onClick={clearPeriodFilter}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Limpar período
+              </button>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por título, categoria, conta ou cartão"
-              className="app-input xl:col-span-2"
-            />
+          {showAdvancedFilters && (
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="mb-3">
+                <p className="text-sm font-semibold text-slate-700">
+                  Filtros avançados
+                </p>
+                <p className="text-xs text-slate-500">
+                  Use esses filtros quando quiser refinar mais a busca.
+                </p>
+              </div>
 
-            <select
-              value={filterType}
-              onChange={(e) =>
-                setFilterType(e.target.value as "" | "income" | "expense")
-              }
-              className="app-input"
-            >
-              <option value="">Todos os tipos</option>
-              <option value="income">Entrada</option>
-              <option value="expense">Saída</option>
-            </select>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <select
+                  value={filterType}
+                  onChange={(e) =>
+                    setFilterType(e.target.value as "" | "income" | "expense")
+                  }
+                  className="app-input"
+                >
+                  <option value="">Todos os tipos</option>
+                  <option value="income">Entrada</option>
+                  <option value="expense">Saída</option>
+                </select>
 
-            <select
-              value={filterInvoiceStatus}
-              onChange={(e) =>
-                setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")
-              }
-              className="app-input"
-            >
-              <option value="">Todos os status</option>
-              <option value="open">Abertas</option>
-              <option value="paid">Protegidas / Fatura paga</option>
-            </select>
+                <select
+                  value={filterInvoiceStatus}
+                  onChange={(e) =>
+                    setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")
+                  }
+                  className="app-input"
+                >
+                  <option value="">Todos os status</option>
+                  <option value="open">Abertas</option>
+                  <option value="paid">Protegidas / Fatura paga</option>
+                </select>
 
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              Limpar filtros
-            </button>
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="app-input"
+                >
+                  <option value="">Todas as categorias</option>
+                  {allCategoryOptions.map((cat) => (
+                    <option key={cat.value} value={cat.value}>
+                      {cat.label}
+                    </option>
+                  ))}
+                </select>
 
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="app-input"
-            >
-              <option value="">Todas as categorias</option>
-              {allCategoryOptions.map((cat) => (
-                <option key={cat.value} value={cat.value}>
-                  {cat.label}
-                </option>
-              ))}
-            </select>
+                <select
+                  value={filterPaymentMethod}
+                  onChange={(e) => setFilterPaymentMethod(e.target.value)}
+                  className="app-input"
+                >
+                  <option value="">Todas as formas</option>
+                  <option value="credit_card">Cartão de crédito</option>
+                  <option value="debit_card">Cartão de débito</option>
+                  <option value="pix">Pix</option>
+                  <option value="cash">Dinheiro</option>
+                  <option value="bank_transfer">Transferência</option>
+                  <option value="boleto">Boleto</option>
+                  <option value="voucher">Voucher / Vale alimentação</option>
+                </select>
 
-            <select
-              value={filterPaymentMethod}
-              onChange={(e) => setFilterPaymentMethod(e.target.value)}
-              className="app-input"
-            >
-              <option value="">Todas as formas</option>
-              <option value="credit_card">Cartão de crédito</option>
-              <option value="debit_card">Cartão de débito</option>
-              <option value="pix">Pix</option>
-              <option value="cash">Dinheiro</option>
-              <option value="bank_transfer">Transferência</option>
-              <option value="boleto">Boleto</option>
-              <option value="voucher">Voucher / Vale alimentação</option>
-            </select>
+                <select
+                  value={filterAccountId}
+                  onChange={(e) => setFilterAccountId(e.target.value)}
+                  className="app-input"
+                >
+                  <option value="">Todas as contas</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
 
-            <select
-              value={filterAccountId}
-              onChange={(e) => setFilterAccountId(e.target.value)}
-              className="app-input"
-            >
-              <option value="">Todas as contas</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
+                <select
+                  value={filterCardId}
+                  onChange={(e) => setFilterCardId(e.target.value)}
+                  className="app-input"
+                >
+                  <option value="">Todos os cartões</option>
+                  {cards.map((card) => (
+                    <option key={card.id} value={card.id}>
+                      {card.name}
+                    </option>
+                  ))}
+                </select>
 
-            <select
-              value={filterCardId}
-              onChange={(e) => setFilterCardId(e.target.value)}
-              className="app-input"
-            >
-              <option value="">Todos os cartões</option>
-              {cards.map((card) => (
-                <option key={card.id} value={card.id}>
-                  {card.name}
-                </option>
-              ))}
-            </select>
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-medium text-slate-600">De</label>
+                  <input
+                    type="date"
+                    value={filterDateFrom}
+                    onChange={(e) => setFilterDateFrom(e.target.value)}
+                    className="app-input"
+                  />
+                </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-sm font-medium text-slate-600">De</label>
-              <input
-                type="date"
-                value={filterDateFrom}
-                onChange={(e) => setFilterDateFrom(e.target.value)}
-                className="app-input"
-              />
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-medium text-slate-600">Até</label>
+                  <input
+                    type="date"
+                    value={filterDateTo}
+                    onChange={(e) => setFilterDateTo(e.target.value)}
+                    className="app-input"
+                  />
+                </div>
+              </div>
             </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-sm font-medium text-slate-600">Até</label>
-              <input
-                type="date"
-                value={filterDateTo}
-                onChange={(e) => setFilterDateTo(e.target.value)}
-                className="app-input"
-              />
-            </div>
-          </div>
+          )}
 
           <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-500">
             <span className="rounded-full bg-slate-100 px-3 py-1">
               {filteredTransactions.length} transação(ões) encontrada(s)
             </span>
+
+            {(searchTerm ||
+              filterType ||
+              filterCategory ||
+              filterPaymentMethod ||
+              filterAccountId ||
+              filterCardId ||
+              filterInvoiceStatus ||
+              filterDateFrom ||
+              filterDateTo) && (
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-700">
+                Filtros ativos
+              </span>
+            )}
           </div>
         </section>
 
