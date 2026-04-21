@@ -468,6 +468,33 @@ function getTransactionEffectiveAmount(transaction: Transaction) {
   );
 }
 
+function getTransactionExpectedAmount(transaction: Transaction) {
+  return Number(transaction.expectedAmount ?? transaction.amount ?? 0);
+}
+
+function getTransactionActualAmount(transaction: Transaction) {
+  return Number(
+    transaction.actualAmount ??
+      transaction.expectedAmount ??
+      transaction.amount ??
+      0
+  );
+}
+
+function getDateDifferenceInDays(expectedDate?: string | null, actualDate?: string | null) {
+  if (!expectedDate || !actualDate) return 0;
+
+  const expected = startOfDay(new Date(expectedDate));
+  const actual = startOfDay(new Date(actualDate));
+
+  if (Number.isNaN(expected.getTime()) || Number.isNaN(actual.getTime())) {
+    return 0;
+  }
+
+  const diffMs = actual.getTime() - expected.getTime();
+  return Math.round(diffMs / (1000 * 60 * 60 * 24));
+}
+
 function getAlertStyles(tone: SmartAlert["tone"]) {
   switch (tone) {
     case "danger":
@@ -683,6 +710,81 @@ export default function DashboardPage() {
       message,
       tone,
     });
+  }
+
+
+  async function handleConfirmTransaction(transaction: Transaction) {
+    try {
+      const amountInput = window.prompt(
+        "Informe o valor real desta transação:",
+        String(getTransactionEffectiveAmount(transaction))
+      );
+
+      if (amountInput === null) return;
+
+      const normalizedAmount = amountInput
+        .replace(/\s/g, "")
+        .replace("R$", "")
+        .replace(/\./g, "")
+        .replace(",", ".")
+        .trim();
+
+      const parsedAmount = Number(normalizedAmount || 0);
+
+      if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+        showToast(
+          "Valor inválido",
+          "Digite um valor válido para confirmar a transação.",
+          "error"
+        );
+        return;
+      }
+
+      const dateInput = window.prompt(
+        "Informe a data real da transação (AAAA-MM-DD):",
+        new Date().toISOString().slice(0, 10)
+      );
+
+      if (dateInput === null) return;
+
+      const response = await fetch(`/api/transactions/${transaction.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: transaction.title,
+          amount: parsedAmount,
+          type: isIncomeType(transaction.type) ? "income" : "expense",
+          category: transaction.category || "",
+          paymentMethod: transaction.paymentMethod || "cash",
+          accountId: transaction.accountId || "",
+          cardId: transaction.cardId || "",
+          date: dateInput,
+          isFixed: Boolean(transaction.isFixed),
+        }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Não foi possível confirmar a transação.");
+      }
+
+      await loadDashboardData();
+
+      showToast(
+        "Transação confirmada",
+        "A transação foi marcada como realizada e já impacta seu saldo real.",
+        "success"
+      );
+    } catch (error) {
+      showToast(
+        "Erro ao confirmar",
+        error instanceof Error ? error.message : "Tente novamente.",
+        "error"
+      );
+    }
   }
 
   async function handleCreateCardInitialBalance(event: FormEvent<HTMLFormElement>) {
@@ -1715,6 +1817,98 @@ export default function DashboardPage() {
       isRisky: lowestBalance < 0,
     };
   }, [currentAccountsBalance, transactions]);
+
+
+  const plannedVsActualSummary = useMemo(() => {
+    const comparableTransactions = filteredTransactions
+      .filter(
+        (transaction) =>
+          transaction.status === "COMPLETED" &&
+          !isAdjustmentTransaction(transaction) &&
+          transaction.expectedAmount !== null &&
+          transaction.expectedAmount !== undefined &&
+          transaction.actualAmount !== null &&
+          transaction.actualAmount !== undefined &&
+          transaction.expectedDate &&
+          transaction.actualDate
+      )
+      .map((transaction) => {
+        const expectedAmount = getTransactionExpectedAmount(transaction);
+        const actualAmount = getTransactionActualAmount(transaction);
+        const amountDiff = actualAmount - expectedAmount;
+        const dateDiffDays = getDateDifferenceInDays(
+          transaction.expectedDate,
+          transaction.actualDate
+        );
+
+        return {
+          ...transaction,
+          expectedAmountValue: expectedAmount,
+          actualAmountValue: actualAmount,
+          amountDiff,
+          absAmountDiff: Math.abs(amountDiff),
+          dateDiffDays,
+          absDateDiffDays: Math.abs(dateDiffDays),
+          expectedDateValue: transaction.expectedDate!,
+          actualDateValue: transaction.actualDate!,
+          isIncome: isIncomeType(transaction.type),
+          isExpense: isExpenseType(transaction.type),
+        };
+      });
+
+    if (!comparableTransactions.length) {
+      return {
+        comparableTransactions: [],
+        incomeDiffTotal: 0,
+        expenseDiffTotal: 0,
+        netImpact: 0,
+        onTimeCount: 0,
+        delayedCount: 0,
+        advancedCount: 0,
+        biggestDeviations: [],
+      };
+    }
+
+    const incomeDiffTotal = comparableTransactions
+      .filter((transaction) => transaction.isIncome)
+      .reduce((sum, transaction) => sum + transaction.amountDiff, 0);
+
+    const expenseDiffTotal = comparableTransactions
+      .filter((transaction) => transaction.isExpense)
+      .reduce((sum, transaction) => sum + transaction.amountDiff, 0);
+
+    const netImpact = incomeDiffTotal - expenseDiffTotal;
+    const onTimeCount = comparableTransactions.filter(
+      (transaction) => transaction.dateDiffDays === 0
+    ).length;
+    const delayedCount = comparableTransactions.filter(
+      (transaction) => transaction.dateDiffDays > 0
+    ).length;
+    const advancedCount = comparableTransactions.filter(
+      (transaction) => transaction.dateDiffDays < 0
+    ).length;
+
+    const biggestDeviations = [...comparableTransactions]
+      .sort((a, b) => {
+        if (b.absAmountDiff !== a.absAmountDiff) {
+          return b.absAmountDiff - a.absAmountDiff;
+        }
+
+        return b.absDateDiffDays - a.absDateDiffDays;
+      })
+      .slice(0, 5);
+
+    return {
+      comparableTransactions,
+      incomeDiffTotal,
+      expenseDiffTotal,
+      netImpact,
+      onTimeCount,
+      delayedCount,
+      advancedCount,
+      biggestDeviations,
+    };
+  }, [filteredTransactions]);
 
 
   const purchaseSimulation = useMemo(() => {
@@ -4774,6 +4968,199 @@ const dataHealthSummary = useMemo(() => {
             </Link>
           </div>
         </section>
+
+        {plannedMonthTransactions.length > 0 ? (
+          <section id="planned-confirmations" className="app-card border-2 border-indigo-200 bg-indigo-50/40">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-indigo-700">Próximas confirmações</p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">
+                  Transações previstas para confirmar
+                </h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Quando a transação acontecer de verdade, use o botão <span className="font-semibold text-indigo-700">Confirmar</span> abaixo para ela passar a impactar seu saldo real.
+                </p>
+              </div>
+              <span className="app-badge-neutral">
+                {plannedMonthTransactions.length} pendente{plannedMonthTransactions.length > 1 ? "s" : ""}
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {plannedMonthTransactions
+                .slice()
+                .sort(
+                  (a, b) =>
+                    new Date(getTransactionEffectiveDate(a)).getTime() -
+                    new Date(getTransactionEffectiveDate(b)).getTime()
+                )
+                .slice(0, 5)
+                .map((transaction) => (
+                  <div
+                    key={transaction.id}
+                    className="app-card-soft flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {transaction.title}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Prevista para{" "}
+                        {new Date(getTransactionEffectiveDate(transaction)).toLocaleDateString("pt-BR")}{" "}
+                        • {isIncomeType(transaction.type) ? "Entrada" : "Saída"}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-slate-700">
+                        {formatCurrency(getTransactionEffectiveAmount(transaction))}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleConfirmTransaction(transaction)}
+                      className="app-button-primary sm:w-auto"
+                    >
+                      Confirmar agora
+                    </button>
+                  </div>
+                ))}
+            </div>
+
+            {plannedMonthTransactions.length > 5 ? (
+              <p className="mt-3 text-xs text-slate-500">
+                Mostrando as 5 primeiras transações previstas deste mês.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
+
+        {plannedVsActualSummary.comparableTransactions.length > 0 ? (
+          <section className="app-card border border-emerald-200 bg-emerald-50/40">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">
+                  Previsto vs realizado
+                </p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">
+                  Como o mês saiu na prática
+                </h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Aqui você vê a diferença entre o que planejou e o que realmente aconteceu nas transações já confirmadas.
+                </p>
+              </div>
+              <span className="app-badge-neutral">
+                {plannedVsActualSummary.comparableTransactions.length} comparada{plannedVsActualSummary.comparableTransactions.length > 1 ? "s" : ""}
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Entradas vs previsto
+                </p>
+                <p className={`mt-2 text-xl font-bold md:text-2xl ${plannedVsActualSummary.incomeDiffTotal >= 0 ? "app-value-positive" : "app-value-negative"}`}>
+                  {plannedVsActualSummary.incomeDiffTotal >= 0 ? "+" : ""}
+                  {formatCurrency(plannedVsActualSummary.incomeDiffTotal)}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Positivo = entrou mais do que o planejado.
+                </p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Saídas vs previsto
+                </p>
+                <p className={`mt-2 text-xl font-bold md:text-2xl ${plannedVsActualSummary.expenseDiffTotal <= 0 ? "app-value-positive" : "app-value-negative"}`}>
+                  {plannedVsActualSummary.expenseDiffTotal > 0 ? "+" : ""}
+                  {formatCurrency(plannedVsActualSummary.expenseDiffTotal)}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Positivo = você gastou mais do que previa.
+                </p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Impacto no saldo
+                </p>
+                <p className={`mt-2 text-xl font-bold md:text-2xl ${plannedVsActualSummary.netImpact >= 0 ? "app-value-positive" : "app-value-negative"}`}>
+                  {plannedVsActualSummary.netImpact >= 0 ? "+" : ""}
+                  {formatCurrency(plannedVsActualSummary.netImpact)}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Resultado líquido entre entradas e saídas.
+                </p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Cumprimento de datas
+                </p>
+                <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">
+                  {plannedVsActualSummary.onTimeCount}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  No prazo · {plannedVsActualSummary.delayedCount} atrasada{plannedVsActualSummary.delayedCount !== 1 ? "s" : ""} · {plannedVsActualSummary.advancedCount} adiantada{plannedVsActualSummary.advancedCount !== 1 ? "s" : ""}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white/80 p-4">
+              <p className="text-sm font-semibold text-slate-900">
+                {plannedVsActualSummary.netImpact > 0
+                  ? `Seu saldo real ficou ${formatCurrency(plannedVsActualSummary.netImpact)} melhor do que o planejado.`
+                  : plannedVsActualSummary.netImpact < 0
+                  ? `Seu saldo real ficou ${formatCurrency(Math.abs(plannedVsActualSummary.netImpact))} abaixo do planejado.`
+                  : "Seu realizado ficou muito próximo do que você tinha planejado."}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Entradas abaixo do previsto reduzem sua folga. Saídas acima do previsto também apertam o saldo.
+              </p>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {plannedVsActualSummary.biggestDeviations.map((transaction) => (
+                <div
+                  key={transaction.id}
+                  className="app-card-soft flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${transaction.isIncome ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                        {transaction.isIncome ? "Entrada" : "Saída"}
+                      </span>
+                    </div>
+
+                    <p className="mt-1 text-xs text-slate-500">
+                      Previsto {formatCurrency(transaction.expectedAmountValue)} em{" "}
+                      {new Date(transaction.expectedDateValue).toLocaleDateString("pt-BR")}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Realizado {formatCurrency(transaction.actualAmountValue)} em{" "}
+                      {new Date(transaction.actualDateValue).toLocaleDateString("pt-BR")}
+                    </p>
+                  </div>
+
+                  <div className="text-left md:text-right">
+                    <p className={`text-sm font-bold ${transaction.isIncome ? (transaction.amountDiff >= 0 ? "app-value-positive" : "app-value-negative") : (transaction.amountDiff <= 0 ? "app-value-positive" : "app-value-negative")}`}>
+                      {transaction.amountDiff > 0 ? "+" : ""}
+                      {formatCurrency(transaction.amountDiff)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {transaction.dateDiffDays === 0
+                        ? "No prazo"
+                        : transaction.dateDiffDays > 0
+                        ? `${transaction.dateDiffDays} dia${transaction.dateDiffDays > 1 ? "s" : ""} depois`
+                        : `${Math.abs(transaction.dateDiffDays)} dia${Math.abs(transaction.dateDiffDays) > 1 ? "s" : ""} antes`}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
 
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-2">
           <Link
