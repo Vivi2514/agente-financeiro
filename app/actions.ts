@@ -2,7 +2,7 @@
 
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
-import { Prisma, TransactionType } from "@prisma/client";
+import { Prisma, TransactionStatus, TransactionType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUserId } from "@/lib/current-user";
 
@@ -68,6 +68,38 @@ function toInstallmentDate(baseDate: Date, installmentIndex: number) {
     baseDate.getSeconds(),
     baseDate.getMilliseconds()
   );
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function buildTransactionForecastFields(baseDate: Date, amount: Prisma.Decimal) {
+  const today = startOfDay(new Date());
+  const transactionDay = startOfDay(baseDate);
+  const isPlanned = transactionDay.getTime() > today.getTime();
+
+  if (isPlanned) {
+    return {
+      status: TransactionStatus.PLANNED,
+      amount,
+      date: baseDate,
+      expectedAmount: amount,
+      expectedDate: baseDate,
+      actualAmount: null,
+      actualDate: null,
+    };
+  }
+
+  return {
+    status: TransactionStatus.COMPLETED,
+    amount,
+    date: baseDate,
+    expectedAmount: amount,
+    expectedDate: baseDate,
+    actualAmount: amount,
+    actualDate: baseDate,
+  };
 }
 
 async function ensureAccountBelongsToUser(accountId: string | null, userId: string) {
@@ -215,16 +247,22 @@ export async function createCardInitialBalance(data: CreateCardInitialBalanceInp
 
   await ensureCardBelongsToUser(cardId, userId);
 
+  const parsedAmount = parseCurrencyToDecimal(data.amount);
+  const parsedDate = new Date(data.date);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    throw new Error("Data do ajuste inicial inválida.");
+  }
+
   await prisma.transaction.create({
     data: {
       title: "Saldo inicial da fatura",
-      amount: parseCurrencyToDecimal(data.amount),
       type: TransactionType.EXPENSE,
       paymentMethod: "credit_card",
       cardId,
-      date: new Date(data.date),
       isAdjustment: true,
       userId,
+      ...buildTransactionForecastFields(parsedDate, parsedAmount),
     },
   });
 
@@ -287,28 +325,21 @@ export async function createTransaction(data: CreateTransactionInput) {
   const isAdjustment = Boolean(data.isAdjustment);
 
   if (explicitInstallmentTotal && explicitInstallmentTotal > 1) {
-    const installmentNumber = explicitInstallmentNumber ?? 1;
-
-    if (installmentNumber > explicitInstallmentTotal) {
-      throw new Error("Parcela informada maior que o total de parcelas.");
-    }
-
     await prisma.transaction.create({
       data: {
         title,
-        amount,
         type: normalizedType,
         category: normalizedCategory,
         paymentMethod,
         accountId,
         cardId,
         invoiceId: normalizedInvoiceId,
-        date: baseDate,
-        installmentNumber,
+        installmentNumber: explicitInstallmentNumber ?? 1,
         installmentTotal: explicitInstallmentTotal,
         purchaseGroupId: normalizedPurchaseGroupId,
         isAdjustment,
         userId,
+        ...buildTransactionForecastFields(baseDate, amount),
       },
       include: {
         account: true,
@@ -324,19 +355,18 @@ export async function createTransaction(data: CreateTransactionInput) {
     await prisma.transaction.create({
       data: {
         title,
-        amount,
         type: normalizedType,
         category: normalizedCategory,
         paymentMethod,
         accountId,
         cardId,
         invoiceId: normalizedInvoiceId,
-        date: baseDate,
         installmentNumber: 1,
         installmentTotal: 1,
         purchaseGroupId: null,
         isAdjustment,
         userId,
+        ...buildTransactionForecastFields(baseDate, amount),
       },
       include: {
         account: true,
@@ -353,22 +383,22 @@ export async function createTransaction(data: CreateTransactionInput) {
   await prisma.$transaction(
     Array.from({ length: requestedInstallments }, (_, index) => {
       const installmentNumber = index + 1;
+      const installmentDate = toInstallmentDate(baseDate, index);
 
       return prisma.transaction.create({
         data: {
           title: buildInstallmentTitle(title, installmentNumber, requestedInstallments),
-          amount,
           type: normalizedType,
           category: normalizedCategory,
           paymentMethod,
           accountId,
           cardId,
-          date: toInstallmentDate(baseDate, index),
           installmentNumber,
           installmentTotal: requestedInstallments,
           purchaseGroupId,
           isAdjustment,
           userId,
+          ...buildTransactionForecastFields(installmentDate, amount),
         },
       });
     })
@@ -434,14 +464,13 @@ export async function updateTransaction(data: UpdateTransactionInput) {
       where: { id: data.id },
       data: {
         title,
-        amount,
         type: normalizedType,
         category: normalizedCategory,
         paymentMethod,
         accountId,
         cardId,
-        date: baseDate,
         isAdjustment,
+        ...buildTransactionForecastFields(baseDate, amount),
       },
     });
 
@@ -483,24 +512,25 @@ export async function updateTransaction(data: UpdateTransactionInput) {
   }
 
   await prisma.$transaction(
-    groupTransactions.map((transaction, index) =>
-      prisma.transaction.update({
+    groupTransactions.map((transaction, index) => {
+      const installmentDate = toInstallmentDate(baseDate, index);
+
+      return prisma.transaction.update({
         where: { id: transaction.id },
         data: {
           title: buildInstallmentTitle(title, index + 1, groupTransactions.length),
-          amount,
           type: normalizedType,
           category: normalizedCategory,
           paymentMethod,
           accountId,
           cardId,
-          date: toInstallmentDate(baseDate, index),
           installmentNumber: index + 1,
           installmentTotal: groupTransactions.length,
           isAdjustment,
+          ...buildTransactionForecastFields(installmentDate, amount),
         },
-      })
-    )
+      });
+    })
   );
 
   revalidatePath("/");
