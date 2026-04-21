@@ -238,6 +238,10 @@ function parseMonthInput(value: string) {
   };
 }
 
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
 function normalizeComparableText(value?: string | null) {
   return (value || "").trim().toLowerCase();
 }
@@ -1011,7 +1015,7 @@ export default function DashboardPage() {
     const { year, month } = parseMonthInput(selectedMonth);
 
     return transactions.filter((transaction) => {
-      const transactionDate = new Date(transaction.date);
+      const transactionDate = new Date(getTransactionEffectiveDate(transaction));
 
       return (
         transactionDate.getFullYear() === year &&
@@ -1020,9 +1024,23 @@ export default function DashboardPage() {
     });
   }, [transactions, selectedMonth]);
 
-  const analyticalTransactions = useMemo(() => {
-    return filteredTransactions.filter((transaction) => !isAdjustmentTransaction(transaction));
+  const realizedMonthTransactions = useMemo(() => {
+    return filteredTransactions.filter(
+      (transaction) =>
+        transaction.status !== "PLANNED" && !isAdjustmentTransaction(transaction)
+    );
   }, [filteredTransactions]);
+
+  const plannedMonthTransactions = useMemo(() => {
+    return filteredTransactions.filter(
+      (transaction) =>
+        transaction.status === "PLANNED" && !isAdjustmentTransaction(transaction)
+    );
+  }, [filteredTransactions]);
+
+  const analyticalTransactions = useMemo(() => {
+    return realizedMonthTransactions;
+  }, [realizedMonthTransactions]);
 
   const filteredExpenses = useMemo(() => {
     return analyticalTransactions.filter((transaction) =>
@@ -1038,14 +1056,14 @@ export default function DashboardPage() {
 
   const totalExpenses = useMemo(() => {
     return filteredExpenses.reduce(
-      (sum, transaction) => sum + Number(transaction.amount || 0),
+      (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
       0
     );
   }, [filteredExpenses]);
 
   const totalIncomes = useMemo(() => {
     return filteredIncomes.reduce(
-      (sum, transaction) => sum + Number(transaction.amount || 0),
+      (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
       0
     );
   }, [filteredIncomes]);
@@ -1057,25 +1075,25 @@ export default function DashboardPage() {
   const fixedExpensesTotal = useMemo(() => {
     return filteredExpenses
       .filter((transaction) => Boolean(transaction.isFixed))
-      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+      .reduce((sum, transaction) => sum + getTransactionEffectiveAmount(transaction), 0);
   }, [filteredExpenses]);
 
   const variableExpensesTotal = useMemo(() => {
     return filteredExpenses
       .filter((transaction) => !transaction.isFixed)
-      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+      .reduce((sum, transaction) => sum + getTransactionEffectiveAmount(transaction), 0);
   }, [filteredExpenses]);
 
   const fixedIncomesTotal = useMemo(() => {
     return filteredIncomes
       .filter((transaction) => Boolean(transaction.isFixed))
-      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+      .reduce((sum, transaction) => sum + getTransactionEffectiveAmount(transaction), 0);
   }, [filteredIncomes]);
 
   const variableIncomesTotal = useMemo(() => {
     return filteredIncomes
       .filter((transaction) => !transaction.isFixed)
-      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+      .reduce((sum, transaction) => sum + getTransactionEffectiveAmount(transaction), 0);
   }, [filteredIncomes]);
 
 
@@ -1136,7 +1154,11 @@ export default function DashboardPage() {
 
   const lastTransactions = useMemo(() => {
     return [...filteredTransactions]
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .sort(
+        (a, b) =>
+          new Date(getTransactionEffectiveDate(b)).getTime() -
+          new Date(getTransactionEffectiveDate(a)).getTime()
+      )
       .slice(0, 5);
   }, [filteredTransactions]);
 
@@ -1409,24 +1431,33 @@ export default function DashboardPage() {
   ]);
 
   const futureInstallments = useMemo(() => {
-    const { year, month } = parseMonthInput(selectedMonth);
-    const baseDate = new Date(year, month - 1, 1);
+    const now = new Date();
 
     return [...transactions]
       .filter((transaction) => {
-        const transactionDate = new Date(transaction.date);
+        const transactionDate = new Date(getTransactionEffectiveDate(transaction));
         const isInstallment = isInstallmentTransaction(transaction);
-        const isFuture = transactionDate.getTime() > baseDate.getTime();
+        const isFuture = transactionDate.getTime() > now.getTime();
         const isExpense = isExpenseType(transaction.type);
 
-        return isInstallment && isFuture && isExpense && !isAdjustmentTransaction(transaction);
+        return (
+          isInstallment &&
+          isFuture &&
+          isExpense &&
+          transaction.status === "PLANNED" &&
+          !isAdjustmentTransaction(transaction)
+        );
       })
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  }, [transactions, selectedMonth]);
+      .sort(
+        (a, b) =>
+          new Date(getTransactionEffectiveDate(a)).getTime() -
+          new Date(getTransactionEffectiveDate(b)).getTime()
+      );
+  }, [analyticalTransactions]);
 
   const futureInstallmentsTotal = useMemo(() => {
     return futureInstallments.reduce(
-      (sum, transaction) => sum + Number(transaction.amount || 0),
+      (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
       0
     );
   }, [futureInstallments]);
@@ -1442,6 +1473,12 @@ export default function DashboardPage() {
   }, [currentAccountsBalance, openInvoicesTotal, futureInstallmentsTotal]);
 
   const dailyBalanceProjection = useMemo(() => {
+    const today = new Date();
+    const todayDay = today.getDate();
+    const isCurrentSelectedMonth =
+      today.getFullYear() === selectedMonthMeta.year &&
+      today.getMonth() + 1 === selectedMonthMeta.month;
+
     let runningBalance = currentAccountsBalance;
     const dailyItems: {
       day: number;
@@ -1450,35 +1487,48 @@ export default function DashboardPage() {
       isWorst?: boolean;
     }[] = [];
 
+    const plannedTransactionsInMonth = plannedMonthTransactions
+      .map((transaction) => ({
+        ...transaction,
+        effectiveDate: new Date(getTransactionEffectiveDate(transaction)),
+        effectiveAmount: getTransactionEffectiveAmount(transaction),
+      }))
+      .filter((transaction) => !Number.isNaN(transaction.effectiveDate.getTime()));
+
     for (let day = 1; day <= selectedMonthMeta.daysInMonth; day += 1) {
       if (day === 1 && selectedMonthOpenInvoicesTotal > 0) {
         runningBalance -= selectedMonthOpenInvoicesTotal;
       }
 
-      const dayTransactions = filteredTransactions.filter((transaction) => {
-        const transactionDate = new Date(transaction.date);
-        return transactionDate.getDate() === day;
-      });
+      if (!isCurrentSelectedMonth || day >= todayDay) {
+        const dayTransactions = plannedTransactionsInMonth.filter((transaction) => {
+          return transaction.effectiveDate.getDate() === day;
+        });
 
-      dayTransactions.forEach((transaction) => {
-        if (isIncomeType(transaction.type)) {
-          runningBalance += Number(transaction.amount || 0);
-          return;
-        }
+        dayTransactions.forEach((transaction) => {
+          if (isIncomeType(transaction.type)) {
+            runningBalance += transaction.effectiveAmount;
+            return;
+          }
 
-        if (isExpenseType(transaction.type)) {
-          runningBalance -= Number(transaction.amount || 0);
-        }
-      });
+          if (isExpenseType(transaction.type)) {
+            runningBalance -= transaction.effectiveAmount;
+          }
+        });
+      }
 
       const dayPendingRecurrings = [
         ...monthlyRecurringProjection.pendingIncomeItems,
-       ...monthlyRecurringProjection.pendingExpenseItems,
+        ...monthlyRecurringProjection.pendingExpenseItems,
       ].filter((item) => {
         const recurringDay = Math.min(
           Math.max(Number(item.dayOfMonth || 1), 1),
           selectedMonthMeta.daysInMonth
         );
+
+        if (isCurrentSelectedMonth && recurringDay < todayDay) {
+          return false;
+        }
 
         return recurringDay === day;
       });
@@ -1515,11 +1565,12 @@ export default function DashboardPage() {
     }));
   }, [
     currentAccountsBalance,
-    filteredTransactions,
     monthlyRecurringProjection.pendingExpenseItems,
     monthlyRecurringProjection.pendingIncomeItems,
+    plannedMonthTransactions,
     selectedMonthMeta.daysInMonth,
     selectedMonthMeta.month,
+    selectedMonthMeta.year,
     selectedMonthOpenInvoicesTotal,
   ]);
 
@@ -1594,8 +1645,13 @@ export default function DashboardPage() {
 
   const nextIncomeForecast = useMemo(() => {
     const now = new Date();
+    const today = startOfDay(now);
+
     const futureTransactions = [...transactions]
-      .filter((transaction) => !isAdjustmentTransaction(transaction))
+      .filter(
+        (transaction) =>
+          transaction.status === "PLANNED" && !isAdjustmentTransaction(transaction)
+      )
       .map((transaction) => ({
         ...transaction,
         effectiveDate: new Date(getTransactionEffectiveDate(transaction)),
@@ -1607,7 +1663,7 @@ export default function DashboardPage() {
     const nextIncome = futureTransactions.find(
       (transaction) =>
         isIncomeType(transaction.type) &&
-        transaction.effectiveDate.getTime() >= now.getTime()
+        transaction.effectiveDate.getTime() >= today.getTime()
     );
 
     if (!nextIncome) {
@@ -1616,13 +1672,13 @@ export default function DashboardPage() {
 
     const transactionsUntilNextIncome = futureTransactions.filter(
       (transaction) =>
-        transaction.effectiveDate.getTime() >= now.getTime() &&
+        transaction.effectiveDate.getTime() >= today.getTime() &&
         transaction.effectiveDate.getTime() <= nextIncome.effectiveDate.getTime()
     );
 
     let runningBalance = currentAccountsBalance;
     let lowestBalance = currentAccountsBalance;
-    let lowestBalanceDate = now;
+    let lowestBalanceDate = today;
 
     transactionsUntilNextIncome.forEach((transaction) => {
       if (isIncomeType(transaction.type)) {
@@ -1642,7 +1698,8 @@ export default function DashboardPage() {
     const daysUntilIncome = Math.max(
       0,
       Math.ceil(
-        (nextIncome.effectiveDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+        (startOfDay(nextIncome.effectiveDate).getTime() - today.getTime()) /
+          (1000 * 60 * 60 * 24)
       )
     );
 
@@ -1725,7 +1782,7 @@ export default function DashboardPage() {
     const grouped = futureInstallments.reduce<
       Record<string, Omit<FutureInstallmentMonthGroup, "projectedBalance">>
     >((acc, transaction) => {
-      const date = new Date(transaction.date);
+      const date = new Date(getTransactionEffectiveDate(transaction));
       const year = date.getFullYear();
       const month = date.getMonth();
       const key = `${year}-${String(month + 1).padStart(2, "0")}`;
@@ -1744,7 +1801,7 @@ export default function DashboardPage() {
         };
       }
 
-      acc[key].total += Number(transaction.amount || 0);
+      acc[key].total += getTransactionEffectiveAmount(transaction);
       acc[key].count += 1;
       acc[key].transactions.push(transaction);
 
@@ -1865,7 +1922,7 @@ export default function DashboardPage() {
   const expenseByCategory = useMemo(() => {
     const map: Record<string, number> = {};
 
-    transactions.forEach((transaction) => {
+    analyticalTransactions.forEach((transaction) => {
       if (!isExpenseType(transaction.type) || isAdjustmentTransaction(transaction)) return;
 
       const category =
@@ -1873,13 +1930,13 @@ export default function DashboardPage() {
           ? transaction.category
           : "Outros";
 
-      map[category] = (map[category] || 0) + Number(transaction.amount || 0);
+      map[category] = (map[category] || 0) + getTransactionEffectiveAmount(transaction);
     });
 
     return Object.entries(map)
       .map(([category, total]) => ({ category, total }))
       .sort((a, b) => b.total - a.total);
-  }, [transactions]);
+  }, [analyticalTransactions]);
 
   const categorySuggestion = useMemo(() => {
     if (!financialInsight) return null;
