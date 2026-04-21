@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { InvoiceStatus, Prisma, TransactionType } from "@prisma/client";
+import {
+  InvoiceStatus,
+  Prisma,
+  TransactionStatus,
+  TransactionType,
+} from "@prisma/client";
 import { requireCurrentUser } from "@/lib/current-user";
 
 type RouteContext = {
@@ -43,15 +48,8 @@ function safeParseDate(value?: string) {
   return parsed;
 }
 
-function shouldAffectAccountBalance(params: {
-  accountId?: string | null;
-  paymentMethod?: string | null;
-}) {
-  const { accountId, paymentMethod } = params;
-
-  if (!accountId) return false;
-
-  return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function normalizeIsFixed(value: unknown): boolean {
@@ -73,6 +71,43 @@ function normalizeOptionalString(value?: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+function buildTransactionForecastFields(date: Date, amount: number) {
+  const today = startOfDay(new Date());
+  const transactionDay = startOfDay(date);
+  const isPlanned = transactionDay.getTime() > today.getTime();
+
+  if (isPlanned) {
+    return {
+      status: TransactionStatus.PLANNED,
+      expectedAmount: amount,
+      actualAmount: null,
+      expectedDate: date,
+      actualDate: null,
+    };
+  }
+
+  return {
+    status: TransactionStatus.COMPLETED,
+    expectedAmount: amount,
+    actualAmount: amount,
+    expectedDate: date,
+    actualDate: date,
+  };
+}
+
+function shouldAffectAccountBalance(params: {
+  accountId?: string | null;
+  paymentMethod?: string | null;
+  status?: TransactionStatus | null;
+}) {
+  const { accountId, paymentMethod, status } = params;
+
+  if (!accountId) return false;
+  if (status !== TransactionStatus.COMPLETED) return false;
+
+  return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
 }
 
 async function applyAccountBalanceChange(
@@ -263,6 +298,21 @@ async function validateCardLimit(
   }
 }
 
+function serializeTransaction<T extends Record<string, any>>(transaction: T) {
+  return {
+    ...transaction,
+    amount: Number(transaction.amount),
+    expectedAmount:
+      transaction.expectedAmount === null || transaction.expectedAmount === undefined
+        ? null
+        : Number(transaction.expectedAmount),
+    actualAmount:
+      transaction.actualAmount === null || transaction.actualAmount === undefined
+        ? null
+        : Number(transaction.actualAmount),
+  };
+}
+
 export async function PATCH(
   req: NextRequest,
   context: RouteContext
@@ -361,7 +411,11 @@ export async function PATCH(
       );
     }
 
-    if (!isCreditCardPayment && normalizedPaymentMethod !== "voucher" && !normalizedAccountId) {
+    if (
+      !isCreditCardPayment &&
+      normalizedPaymentMethod !== "voucher" &&
+      !normalizedAccountId
+    ) {
       return NextResponse.json(
         { error: "Selecione uma conta." },
         { status: 400 }
@@ -428,21 +482,28 @@ export async function PATCH(
           ? null
           : normalizedAccountId;
 
+      const nextForecastFields = buildTransactionForecastFields(
+        parsedDate,
+        numericAmount
+      );
+
       const previousShouldAffectBalance = shouldAffectAccountBalance({
         accountId: transaction.accountId,
         paymentMethod: transaction.paymentMethod,
+        status: transaction.status,
       });
 
       const nextShouldAffectBalance = shouldAffectAccountBalance({
         accountId: nextAccountId,
         paymentMethod: normalizedPaymentMethod,
+        status: nextForecastFields.status,
       });
 
       if (previousShouldAffectBalance && transaction.accountId) {
         await revertAccountBalanceChange(tx, {
           accountId: transaction.accountId,
           type: transaction.type,
-          amount: Number(transaction.amount || 0),
+          amount: Number(transaction.actualAmount ?? transaction.amount ?? 0),
         });
       }
 
@@ -455,6 +516,11 @@ export async function PATCH(
           category: normalizedCategory,
           paymentMethod: normalizedPaymentMethod,
           date: parsedDate,
+          status: nextForecastFields.status,
+          expectedAmount: nextForecastFields.expectedAmount,
+          actualAmount: nextForecastFields.actualAmount,
+          expectedDate: nextForecastFields.expectedDate,
+          actualDate: nextForecastFields.actualDate,
           isFixed: normalizedIsFixed,
           accountId: nextAccountId,
           cardId: isCreditCardPayment ? normalizedCardId : null,
@@ -487,10 +553,7 @@ export async function PATCH(
         await recalculateInvoiceTotal(tx, invoiceId, user.id);
       }
 
-      return {
-        ...updatedTransaction,
-        amount: Number(updatedTransaction.amount),
-      };
+      return serializeTransaction(updatedTransaction);
     });
 
     return NextResponse.json(result);
@@ -594,13 +657,14 @@ export async function DELETE(
             shouldAffectAccountBalance({
               accountId: item.accountId,
               paymentMethod: item.paymentMethod,
+              status: item.status,
             }) &&
             item.accountId
           ) {
             await revertAccountBalanceChange(tx, {
               accountId: item.accountId,
               type: item.type,
-              amount: Number(item.amount || 0),
+              amount: Number(item.actualAmount ?? item.amount ?? 0),
             });
           }
         }
@@ -628,13 +692,14 @@ export async function DELETE(
         shouldAffectAccountBalance({
           accountId: transaction.accountId,
           paymentMethod: transaction.paymentMethod,
+          status: transaction.status,
         }) &&
         transaction.accountId
       ) {
         await revertAccountBalanceChange(tx, {
           accountId: transaction.accountId,
           type: transaction.type,
-          amount: Number(transaction.amount || 0),
+          amount: Number(transaction.actualAmount ?? transaction.amount ?? 0),
         });
       }
 

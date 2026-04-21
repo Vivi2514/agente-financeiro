@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomUUID } from "crypto";
-import { InvoiceStatus, Prisma, TransactionType } from "@prisma/client";
+import {
+  InvoiceStatus,
+  Prisma,
+  TransactionStatus,
+  TransactionType,
+} from "@prisma/client";
 import { requireCurrentUser } from "@/lib/current-user";
 
 function safeParseDate(value?: string) {
@@ -59,13 +64,43 @@ function normalizeOptionalString(value?: unknown) {
   return trimmed === "" ? null : trimmed;
 }
 
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function buildTransactionForecastFields(date: Date, amount: number) {
+  const today = startOfDay(new Date());
+  const transactionDay = startOfDay(date);
+  const isPlanned = transactionDay.getTime() > today.getTime();
+
+  if (isPlanned) {
+    return {
+      status: TransactionStatus.PLANNED,
+      expectedAmount: amount,
+      actualAmount: null,
+      expectedDate: date,
+      actualDate: null,
+    };
+  }
+
+  return {
+    status: TransactionStatus.COMPLETED,
+    expectedAmount: amount,
+    actualAmount: amount,
+    expectedDate: date,
+    actualDate: date,
+  };
+}
+
 function shouldAffectAccountBalance(params: {
   accountId?: string | null;
   paymentMethod?: string | null;
+  status: TransactionStatus;
 }) {
-  const { accountId, paymentMethod } = params;
+  const { accountId, paymentMethod, status } = params;
 
   if (!accountId) return false;
+  if (status !== TransactionStatus.COMPLETED) return false;
 
   return paymentMethod !== "credit_card" && paymentMethod !== "voucher";
 }
@@ -230,6 +265,21 @@ async function validateCardLimit(
   }
 }
 
+function serializeTransaction<T extends Record<string, any>>(transaction: T) {
+  return {
+    ...transaction,
+    amount: Number(transaction.amount),
+    expectedAmount:
+      transaction.expectedAmount === null || transaction.expectedAmount === undefined
+        ? null
+        : Number(transaction.expectedAmount),
+    actualAmount:
+      transaction.actualAmount === null || transaction.actualAmount === undefined
+        ? null
+        : Number(transaction.actualAmount),
+  };
+}
+
 export async function GET() {
   try {
     const user = await requireCurrentUser();
@@ -243,18 +293,10 @@ export async function GET() {
         card: true,
         invoice: true,
       },
-      orderBy: [
-        { date: "desc" },
-        { createdAt: "desc" },
-      ],
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     });
 
-    return NextResponse.json(
-      transactions.map((transaction) => ({
-        ...transaction,
-        amount: Number(transaction.amount),
-      }))
-    );
+    return NextResponse.json(transactions.map(serializeTransaction));
   } catch (error) {
     console.error("Erro ao buscar transações:", error);
     return NextResponse.json(
@@ -312,17 +354,18 @@ export async function POST(req: Request) {
     const normalizedCardId = normalizeOptionalString(cardId);
 
     if (Number.isNaN(numericAmount) || numericAmount <= 0) {
-      return NextResponse.json(
-        { error: "Valor inválido." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Valor inválido." }, { status: 400 });
     }
 
     const isExpense = normalizedType === TransactionType.EXPENSE;
     const isCreditCardPayment = normalizedPaymentMethod === "credit_card";
     const totalInstallments = Number(installments || 1);
 
-    if (!Number.isInteger(totalInstallments) || totalInstallments < 1 || totalInstallments > 24) {
+    if (
+      !Number.isInteger(totalInstallments) ||
+      totalInstallments < 1 ||
+      totalInstallments > 24
+    ) {
       return NextResponse.json(
         { error: "O número de parcelas deve estar entre 1 e 24." },
         { status: 400 }
@@ -382,7 +425,12 @@ export async function POST(req: Request) {
         }
       }
 
-      if (isCreditCardPayment && normalizedCardId && isExpense && !normalizedIsAdjustment) {
+      if (
+        isCreditCardPayment &&
+        normalizedCardId &&
+        isExpense &&
+        !normalizedIsAdjustment
+      ) {
         await validateCardLimit(tx, {
           userId: user.id,
           cardId: normalizedCardId,
@@ -423,6 +471,11 @@ export async function POST(req: Request) {
                   ).toFixed(2)
                 );
 
+          const forecastFields = buildTransactionForecastFields(
+            installmentDate,
+            installmentAmount
+          );
+
           const transaction = await tx.transaction.create({
             data: {
               title: `${normalizedTitle} (${i}/${totalInstallments})`,
@@ -433,6 +486,11 @@ export async function POST(req: Request) {
               isFixed: normalizedIsFixed,
               isAdjustment: normalizedIsAdjustment,
               date: installmentDate,
+              status: forecastFields.status,
+              expectedAmount: forecastFields.expectedAmount,
+              actualAmount: forecastFields.actualAmount,
+              expectedDate: forecastFields.expectedDate,
+              actualDate: forecastFields.actualDate,
               accountId: null,
               cardId: normalizedCardId,
               invoiceId: invoice.id,
@@ -449,11 +507,7 @@ export async function POST(req: Request) {
           });
 
           affectedInvoiceIds.add(invoice.id);
-
-          createdTransactions.push({
-            ...transaction,
-            amount: Number(transaction.amount),
-          });
+          createdTransactions.push(serializeTransaction(transaction));
         }
 
         for (const invoiceId of affectedInvoiceIds) {
@@ -487,6 +541,11 @@ export async function POST(req: Request) {
           ? null
           : normalizedAccountId;
 
+      const forecastFields = buildTransactionForecastFields(
+        parsedDate,
+        numericAmount
+      );
+
       const transaction = await tx.transaction.create({
         data: {
           title: normalizedTitle,
@@ -497,6 +556,11 @@ export async function POST(req: Request) {
           isFixed: normalizedIsFixed,
           isAdjustment: normalizedIsAdjustment,
           date: parsedDate,
+          status: forecastFields.status,
+          expectedAmount: forecastFields.expectedAmount,
+          actualAmount: forecastFields.actualAmount,
+          expectedDate: forecastFields.expectedDate,
+          actualDate: forecastFields.actualDate,
           accountId: nextAccountId,
           cardId: isCreditCardPayment ? normalizedCardId : null,
           invoiceId,
@@ -520,6 +584,7 @@ export async function POST(req: Request) {
         shouldAffectAccountBalance({
           accountId: nextAccountId,
           paymentMethod: normalizedPaymentMethod,
+          status: forecastFields.status,
         }) &&
         nextAccountId
       ) {
@@ -530,16 +595,10 @@ export async function POST(req: Request) {
         });
       }
 
-      return {
-        ...transaction,
-        amount: Number(transaction.amount),
-      };
+      return serializeTransaction(transaction);
     });
 
-    return NextResponse.json(
-      result,
-      { status: 201 }
-    );
+    return NextResponse.json(result, { status: 201 });
   } catch (error) {
     console.error("Erro ao criar transação:", error);
 

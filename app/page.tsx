@@ -25,6 +25,11 @@ type Transaction = {
   title: string;
   amount: number;
   type: string;
+  status?: "PLANNED" | "COMPLETED";
+  expectedAmount?: number | null;
+  actualAmount?: number | null;
+  expectedDate?: string | null;
+  actualDate?: string | null;
   category?: string | null;
   paymentMethod?: string | null;
   accountId?: string | null;
@@ -437,6 +442,25 @@ function isAdjustmentTransaction(transaction?: Transaction | null) {
     normalizedTitle === "saldo inicial da fatura" ||
     normalizedTitle === "ajuste inicial do cartao" ||
     normalizedTitle === "ajuste inicial do cartão"
+  );
+}
+
+function getTransactionEffectiveDate(transaction: Transaction) {
+  return transaction.actualDate || transaction.expectedDate || transaction.date;
+}
+
+function getTransactionEffectiveAmount(transaction: Transaction) {
+  if (transaction.status === "PLANNED") {
+    return Number(
+      transaction.expectedAmount ?? transaction.amount ?? 0
+    );
+  }
+
+  return Number(
+    transaction.actualAmount ??
+      transaction.expectedAmount ??
+      transaction.amount ??
+      0
   );
 }
 
@@ -1567,6 +1591,73 @@ export default function DashboardPage() {
     selectedMonthMeta.month,
     selectedMonthMeta.year,
   ]);
+
+  const nextIncomeForecast = useMemo(() => {
+    const now = new Date();
+    const futureTransactions = [...transactions]
+      .filter((transaction) => !isAdjustmentTransaction(transaction))
+      .map((transaction) => ({
+        ...transaction,
+        effectiveDate: new Date(getTransactionEffectiveDate(transaction)),
+        effectiveAmount: getTransactionEffectiveAmount(transaction),
+      }))
+      .filter((transaction) => !Number.isNaN(transaction.effectiveDate.getTime()))
+      .sort((a, b) => a.effectiveDate.getTime() - b.effectiveDate.getTime());
+
+    const nextIncome = futureTransactions.find(
+      (transaction) =>
+        isIncomeType(transaction.type) &&
+        transaction.effectiveDate.getTime() >= now.getTime()
+    );
+
+    if (!nextIncome) {
+      return null;
+    }
+
+    const transactionsUntilNextIncome = futureTransactions.filter(
+      (transaction) =>
+        transaction.effectiveDate.getTime() >= now.getTime() &&
+        transaction.effectiveDate.getTime() <= nextIncome.effectiveDate.getTime()
+    );
+
+    let runningBalance = currentAccountsBalance;
+    let lowestBalance = currentAccountsBalance;
+    let lowestBalanceDate = now;
+
+    transactionsUntilNextIncome.forEach((transaction) => {
+      if (isIncomeType(transaction.type)) {
+        runningBalance += transaction.effectiveAmount;
+      } else if (isExpenseType(transaction.type)) {
+        runningBalance -= transaction.effectiveAmount;
+      }
+
+      if (runningBalance < lowestBalance) {
+        lowestBalance = runningBalance;
+        lowestBalanceDate = transaction.effectiveDate;
+      }
+    });
+
+    const projectedBalance = runningBalance;
+    const safeToSpend = Math.max(0, lowestBalance);
+    const daysUntilIncome = Math.max(
+      0,
+      Math.ceil(
+        (nextIncome.effectiveDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+      )
+    );
+
+    return {
+      nextIncome,
+      projectedBalance,
+      lowestBalance,
+      lowestBalanceDate,
+      safeToSpend,
+      daysUntilIncome,
+      transactionsUntilNextIncome,
+      incomeAmount: nextIncome.effectiveAmount,
+      isRisky: lowestBalance < 0,
+    };
+  }, [currentAccountsBalance, transactions]);
 
 
   const purchaseSimulation = useMemo(() => {
@@ -4435,6 +4526,77 @@ const dataHealthSummary = useMemo(() => {
             </div>
           </div>
         </header>
+
+        {nextIncomeForecast ? (
+          <section className="app-card">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo futuro</p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">Previsão até a próxima entrada</h2>
+              </div>
+              <span
+                className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                  nextIncomeForecast.isRisky
+                    ? "bg-rose-100 text-rose-700"
+                    : "bg-indigo-100 text-indigo-700"
+                }`}
+              >
+                {nextIncomeForecast.isRisky ? "Atenção" : "Planejado"}
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo atual</p>
+                <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">
+                  {formatCurrency(currentAccountsBalance)}
+                </p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Próxima entrada</p>
+                <p className="mt-2 text-sm font-bold text-slate-900 md:text-base">
+                  {nextIncomeForecast.nextIncome.title}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {new Date(getTransactionEffectiveDate(nextIncomeForecast.nextIncome)).toLocaleDateString("pt-BR")} · {formatCurrency(nextIncomeForecast.incomeAmount)}
+                </p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo projetado</p>
+                <p className={`mt-2 text-xl font-bold md:text-2xl ${nextIncomeForecast.projectedBalance >= 0 ? "text-indigo-700" : "app-value-negative"}`}>
+                  {formatCurrency(nextIncomeForecast.projectedBalance)}
+                </p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pode gastar até lá</p>
+                <p className={`mt-2 text-xl font-bold md:text-2xl ${nextIncomeForecast.safeToSpend > 0 ? "text-sky-700" : "app-value-negative"}`}>
+                  {formatCurrency(nextIncomeForecast.safeToSpend)}
+                </p>
+              </div>
+            </div>
+
+            <div className={`mt-3 rounded-2xl border px-4 py-4 ${nextIncomeForecast.isRisky ? "border-rose-200 bg-rose-50" : "border-indigo-200 bg-indigo-50"}`}>
+              <p className={`text-sm font-semibold ${nextIncomeForecast.isRisky ? "text-rose-900" : "text-indigo-900"}`}>
+                {nextIncomeForecast.isRisky
+                  ? `Seu caixa pode ficar negativo antes da próxima entrada.`
+                  : `Sua projeção até a próxima entrada está sob controle.`}
+              </p>
+              <p className="mt-1 text-sm text-slate-700">
+                {nextIncomeForecast.isRisky
+                  ? `O pior ponto no caminho está em ${formatCurrency(nextIncomeForecast.lowestBalance)} em ${nextIncomeForecast.lowestBalanceDate.toLocaleDateString("pt-BR")}.`
+                  : `O menor saldo no caminho é ${formatCurrency(nextIncomeForecast.lowestBalance)} em ${nextIncomeForecast.lowestBalanceDate.toLocaleDateString("pt-BR")}.`}
+              </p>
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                {nextIncomeForecast.daysUntilIncome === 0
+                  ? "A próxima entrada está prevista para hoje."
+                  : `Faltam ${nextIncomeForecast.daysUntilIncome} dia(s) para essa entrada cair.`}
+              </p>
+            </div>
+          </section>
+        ) : null}
 
         <section className="app-card">
           <div className="flex items-start justify-between gap-3">
