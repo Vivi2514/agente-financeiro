@@ -883,10 +883,10 @@ export default function TransactionsPage() {
   return (
     <main className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-3xl bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
+        <header className="flex flex-col gap-4 app-card md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-500">Transações</p>
-            <h1 className="text-3xl font-bold text-slate-900">
+            <p className="app-subtitle">Transações</p>
+            <h1 className="app-title">
               Lançamentos financeiros
             </h1>
             <p className="mt-1 text-sm text-slate-500">
@@ -897,21 +897,21 @@ export default function TransactionsPage() {
           <div className="flex flex-wrap gap-3">
             <Link
               href="/"
-              className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+              className="app-button-primary"
             >
               Ir para dashboard
             </Link>
 
             <Link
               href="/accounts"
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+              className="app-button-secondary"
             >
               Contas e cartões
             </Link>
 
             <Link
               href="/invoices"
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+              className="app-button-secondary"
             >
               Faturas
             </Link>
@@ -919,21 +919,21 @@ export default function TransactionsPage() {
         </header>
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <p className="text-sm font-medium text-slate-500">Entradas</p>
             <h2 className="mt-2 text-2xl font-bold text-emerald-600">
               {formatCurrency(totalIncome)}
             </h2>
           </div>
 
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <p className="text-sm font-medium text-slate-500">Saídas</p>
             <h2 className="mt-2 text-2xl font-bold text-rose-600">
               {formatCurrency(totalExpense)}
             </h2>
           </div>
 
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <p className="text-sm font-medium text-slate-500">Saldo</p>
             <h2
               className={`mt-2 text-2xl font-bold ${
@@ -945,7 +945,7 @@ export default function TransactionsPage() {
           </div>
         </section>
 
-        <section className="rounded-3xl bg-white p-6 shadow-sm">
+        <section className="app-card">
           <div className="mb-5">
             <h2 className="text-xl font-bold text-slate-900">
               Filtros e busca
@@ -982,7 +982,7 @@ export default function TransactionsPage() {
             <button
               type="button"
               onClick={applyTodayFilter}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="app-button-secondary"
             >
               Hoje
             </button>
@@ -990,7 +990,7 @@ export default function TransactionsPage() {
             <button
               type="button"
               onClick={applyLast7DaysFilter}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="app-button-secondary"
             >
               7 dias
             </button>
@@ -998,7 +998,7 @@ export default function TransactionsPage() {
             <button
               type="button"
               onClick={applyLast30DaysFilter}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="app-button-secondary"
             >
               30 dias
             </button>
@@ -1006,7 +1006,7 @@ export default function TransactionsPage() {
             <button
               type="button"
               onClick={applyCurrentMonthFilter}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="app-button-secondary"
             >
               Este mês
             </button>
@@ -1014,7 +1014,7 @@ export default function TransactionsPage() {
             <button
               type="button"
               onClick={clearPeriodFilter}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="app-button-secondary"
             >
               Limpar período
             </button>
@@ -1026,7 +1026,7 @@ export default function TransactionsPage() {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Buscar por título, categoria, conta ou cartão"
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 xl:col-span-2"
+              className="app-input xl:col-span-2"
             />
 
             <select
@@ -1034,7 +1034,7 @@ export default function TransactionsPage() {
               onChange={(e) =>
                 setFilterType(e.target.value as "" | "income" | "expense")
               }
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+              className="app-input"
             >
               <option value="">Todos os tipos</option>
               <option value="income">Entrada</option>
@@ -1046,7 +1046,7 @@ export default function TransactionsPage() {
               onChange={(e) =>
                 setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")
               }
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+              className="app-input"
             >
               <option value="">Todos os status</option>
               <option value="open">Abertas</option>
@@ -1064,7 +1064,7 @@ export default function TransactionsPage() {
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+              className="app-input"
             >
               <option value="">Todas as categorias</option>
               {allCategoryOptions.map((cat) => (
@@ -1077,7 +1077,7 @@ export default function TransactionsPage() {
             <select
               value={filterPaymentMethod}
               onChange={(e) => setFilterPaymentMethod(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+              className="app-input"
             >
               <option value="">Todas as formas</option>
               <option value="credit_card">Cartão de crédito</option>
@@ -1092,7 +1092,7 @@ export default function TransactionsPage() {
             <select
               value={filterAccountId}
               onChange={(e) => setFilterAccountId(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+              className="app-input"
             >
               <option value="">Todas as contas</option>
               {accounts.map((account) => (
@@ -1105,7 +1105,7 @@ export default function TransactionsPage() {
             <select
               value={filterCardId}
               onChange={(e) => setFilterCardId(e.target.value)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+              className="app-input"
             >
               <option value="">Todos os cartões</option>
               {cards.map((card) => (
@@ -1121,7 +1121,7 @@ export default function TransactionsPage() {
                 type="date"
                 value={filterDateFrom}
                 onChange={(e) => setFilterDateFrom(e.target.value)}
-                className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
             </div>
 
@@ -1131,7 +1131,7 @@ export default function TransactionsPage() {
                 type="date"
                 value={filterDateTo}
                 onChange={(e) => setFilterDateTo(e.target.value)}
-                className="rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
             </div>
           </div>
@@ -1144,7 +1144,7 @@ export default function TransactionsPage() {
         </section>
 
         <section className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_1fr]">
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <div className="mb-5">
               <h2 className="text-xl font-bold text-slate-900">
                 Nova transação
@@ -1164,7 +1164,7 @@ export default function TransactionsPage() {
                   onChange={(e) =>
                     setSpecialType(e.target.value as SpecialTransactionType)
                   }
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                  className="w-full app-input"
                 >
                   <option value="normal">Transação normal</option>
                   <option value="card_adjustment">Ajuste inicial do cartão</option>
@@ -1187,7 +1187,7 @@ export default function TransactionsPage() {
                       ? "Ex: Ajuste inicial do cartão"
                       : "Ex: Mercado, Salário, Aluguel"
                   }
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                  className="w-full app-input"
                 />
               </div>
 
@@ -1203,7 +1203,7 @@ export default function TransactionsPage() {
                     setAmountInput(formatCurrencyInput(e.target.value))
                   }
                   placeholder="R$ 0,00"
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                  className="w-full app-input"
                 />
               </div>
 
@@ -1218,7 +1218,7 @@ export default function TransactionsPage() {
                       setType(e.target.value as "income" | "expense")
                     }
                     disabled={specialType === "card_adjustment"}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100"
+                    className="w-full app-input disabled:cursor-not-allowed disabled:bg-slate-100"
                   >
                     <option value="expense">Saída</option>
                     <option value="income">Entrada</option>
@@ -1233,7 +1233,7 @@ export default function TransactionsPage() {
                     type="date"
                     value={createdAt}
                     onChange={(e) => setCreatedAt(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    className="w-full app-input"
                   />
                 </div>
               </div>
@@ -1246,7 +1246,7 @@ export default function TransactionsPage() {
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    className="w-full app-input"
                   >
                     {categoryOptions.map((cat) => (
                       <option key={cat.value} value={cat.value}>
@@ -1269,7 +1269,7 @@ export default function TransactionsPage() {
                   <select
                     value={isFixed ? "fixed" : "variable"}
                     onChange={(e) => setIsFixed(e.target.value === "fixed")}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    className="w-full app-input"
                   >
                     <option value="variable">Variável</option>
                     <option value="fixed">Fixa</option>
@@ -1290,7 +1290,7 @@ export default function TransactionsPage() {
                     onChange={(e) =>
                       setPaymentMethod(e.target.value as PaymentMethod)
                     }
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    className="w-full app-input"
                   >
                     <option value="">Selecione</option>
                     {type === "expense" && (
@@ -1321,7 +1321,7 @@ export default function TransactionsPage() {
                       onChange={(e) =>
                         setCreditMode(e.target.value as CreditMode)
                       }
-                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                      className="w-full app-input"
                     >
                       <option value="avista">Crédito à vista</option>
                       <option value="parcelado">Crédito parcelado</option>
@@ -1339,7 +1339,7 @@ export default function TransactionsPage() {
                         max={24}
                         value={installments}
                         onChange={(e) => setInstallments(e.target.value)}
-                        className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                        className="w-full app-input"
                       />
                     </div>
                   )}
@@ -1354,7 +1354,7 @@ export default function TransactionsPage() {
                   <select
                     value={cardId}
                     onChange={(e) => setCardId(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    className="w-full app-input"
                   >
                     <option value="">Selecione um cartão</option>
                     {cards.map((card) => (
@@ -1372,7 +1372,7 @@ export default function TransactionsPage() {
                   <select
                     value={accountId}
                     onChange={(e) => setAccountId(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                    className="w-full app-input"
                   >
                     <option value="">Selecione uma conta</option>
                     {accounts.map((account) => (
@@ -1391,14 +1391,14 @@ export default function TransactionsPage() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full rounded-2xl bg-slate-900 px-4 py-3 font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="app-button-primary w-full disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {submitting ? "Salvando..." : "Salvar transação"}
               </button>
             </form>
           </div>
 
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">
@@ -1473,7 +1473,7 @@ export default function TransactionsPage() {
                                   prev ? { ...prev, title: e.target.value } : prev
                                 )
                               }
-                              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                              className="w-full app-input"
                             />
                           </div>
 
@@ -1497,7 +1497,7 @@ export default function TransactionsPage() {
                                     : prev
                                 )
                               }
-                              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                              className="w-full app-input"
                             />
                           </div>
 
@@ -1531,7 +1531,7 @@ export default function TransactionsPage() {
                                     };
                                   })
                                 }
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                                className="w-full app-input"
                               >
                                 <option value="expense">Saída</option>
                                 <option value="income">Entrada</option>
@@ -1552,7 +1552,7 @@ export default function TransactionsPage() {
                                       : prev
                                   )
                                 }
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                                className="w-full app-input"
                               />
                             </div>
                           </div>
@@ -1570,7 +1570,7 @@ export default function TransactionsPage() {
                                     : prev
                                 )
                               }
-                              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                              className="w-full app-input"
                             >
                               {editCategoryOptions.map((cat) => (
                                 <option key={cat.value} value={cat.value}>
@@ -1597,7 +1597,7 @@ export default function TransactionsPage() {
                                       : prev
                                   )
                                 }
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                                className="w-full app-input"
                               >
                                 <option value="variable">Variável</option>
                                 <option value="fixed">Fixa</option>
@@ -1632,7 +1632,7 @@ export default function TransactionsPage() {
                                   };
                                 })
                               }
-                              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                              className="w-full app-input"
                             >
                               <option value="">Selecione</option>
                               {editForm.type === "expense" && (
@@ -1661,7 +1661,7 @@ export default function TransactionsPage() {
                                     prev ? { ...prev, cardId: e.target.value } : prev
                                   )
                                 }
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                                className="w-full app-input"
                               >
                                 <option value="">Selecione um cartão</option>
                                 {cards.map((card) => (
@@ -1685,7 +1685,7 @@ export default function TransactionsPage() {
                                       : prev
                                   )
                                 }
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                                className="w-full app-input"
                               >
                                 <option value="">Selecione uma conta</option>
                                 {accounts.map((account) => (
@@ -1706,7 +1706,7 @@ export default function TransactionsPage() {
                               type="button"
                               onClick={() => saveEdit(transaction.id)}
                               disabled={savingEdit}
-                              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="app-button-primary disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {savingEdit ? "Salvando..." : "Salvar"}
                             </button>
@@ -1715,7 +1715,7 @@ export default function TransactionsPage() {
                               type="button"
                               onClick={cancelEditing}
                               disabled={savingEdit}
-                              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               Cancelar
                             </button>
@@ -1837,7 +1837,7 @@ export default function TransactionsPage() {
                                       handleDelete(transaction.id, false)
                                     }
                                     disabled={deletingId === transaction.id}
-                                    className="rounded-xl border border-rose-200 px-3 py-2 text-sm font-medium text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    className="app-button-danger disabled:cursor-not-allowed disabled:opacity-60"
                                   >
                                     {deletingId === transaction.id
                                       ? "Excluindo..."
