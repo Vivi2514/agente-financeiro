@@ -115,7 +115,7 @@ function getInvoiceTransactionCategoryLabel(transaction: InvoiceTransaction) {
 function getUsageStyles(usagePercent: number | null) {
   if (usagePercent === null) {
     return {
-      badge: "bg-slate-100 text-slate-700",
+      badge: "app-badge-neutral",
       text: "Sem limite",
       bar: "bg-slate-300",
     };
@@ -123,7 +123,7 @@ function getUsageStyles(usagePercent: number | null) {
 
   if (usagePercent >= 90) {
     return {
-      badge: "bg-rose-100 text-rose-700",
+      badge: "app-badge-danger",
       text: "Muito pressionado",
       bar: "bg-rose-500",
     };
@@ -131,14 +131,14 @@ function getUsageStyles(usagePercent: number | null) {
 
   if (usagePercent >= 70) {
     return {
-      badge: "bg-amber-100 text-amber-700",
+      badge: "app-badge-warning",
       text: "Atenção",
       bar: "bg-amber-500",
     };
   }
 
   return {
-    badge: "bg-emerald-100 text-emerald-700",
+    badge: "app-badge-success",
     text: "Saudável",
     bar: "bg-emerald-500",
   };
@@ -315,14 +315,14 @@ export default function InvoicesPage() {
   return (
     <main className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="mx-auto max-w-6xl space-y-6">
-        <header className="rounded-3xl bg-white p-6 shadow-sm">
+        <header className="app-card">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
               <p className="text-sm font-medium text-slate-500">Cartão de crédito</p>
-              <h1 className="text-3xl font-bold text-slate-900">
+              <h1 className="app-title">
                 Faturas e limites
               </h1>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 app-subtitle">
                 Veja faturas, limite usado, disponível e o peso de cada cartão no mês.
               </p>
             </div>
@@ -330,21 +330,21 @@ export default function InvoicesPage() {
             <div className="flex flex-wrap gap-3">
               <Link
                 href="/"
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+                className="app-button-primary"
               >
                 Dashboard
               </Link>
 
               <Link
                 href="/transactions"
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                className="app-button-secondary"
               >
                 Transações
               </Link>
 
               <Link
                 href="/accounts"
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                className="app-button-secondary"
               >
                 Contas e cartões
               </Link>
@@ -352,11 +352,11 @@ export default function InvoicesPage() {
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <div className="app-card-soft">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 Faturas em aberto
               </p>
-              <p className="mt-2 text-2xl font-bold text-slate-900">
+              <p className="mt-2 text-2xl app-value-neutral">
                 {formatCurrency(openInvoicesTotal)}
               </p>
               <p className="mt-1 text-xs text-slate-500">
@@ -364,11 +364,11 @@ export default function InvoicesPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <div className="app-card-soft">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 Limite total
               </p>
-              <p className="mt-2 text-2xl font-bold text-slate-900">
+              <p className="mt-2 text-2xl app-value-neutral">
                 {formatCurrency(totalCardLimit)}
               </p>
               <p className="mt-1 text-xs text-slate-500">
@@ -376,11 +376,11 @@ export default function InvoicesPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <div className="app-card-soft">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 Limite usado
               </p>
-              <p className="mt-2 text-2xl font-bold text-rose-600">
+              <p className="mt-2 text-2xl app-value-negative">
                 {formatCurrency(totalUsedLimit)}
               </p>
               <p className="mt-1 text-xs text-slate-500">
@@ -388,11 +388,11 @@ export default function InvoicesPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <div className="app-card-soft">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 Disponível
               </p>
-              <p className="mt-2 text-2xl font-bold text-emerald-600">
+              <p className="mt-2 text-2xl app-value-positive">
                 {formatCurrency(totalAvailableLimit)}
               </p>
               <p className="mt-1 text-xs text-slate-500">
@@ -408,7 +408,7 @@ export default function InvoicesPage() {
           </div>
         ) : (
           <>
-            <section className="rounded-3xl bg-white p-6 shadow-sm">
+            <section className="app-card">
               <div className="mb-5">
                 <h2 className="text-xl font-bold text-slate-900">
                   Leitura rápida por cartão
@@ -419,7 +419,7 @@ export default function InvoicesPage() {
               </div>
 
               {cardSummaries.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">
+                <div className="app-card-soft">
                   Nenhum cartão encontrado.
                 </div>
               ) : (
@@ -449,7 +449,7 @@ export default function InvoicesPage() {
                               </span>
                             </div>
 
-                            <p className="mt-1 text-sm text-slate-500">
+                            <p className="mt-1 app-subtitle">
                               {summary.latestOpenInvoice
                                 ? `Fatura atual: ${getInvoiceLabel(
                                     summary.latestOpenInvoice.month,
@@ -531,7 +531,7 @@ export default function InvoicesPage() {
               )}
             </section>
 
-            <section className="rounded-3xl bg-white p-6 shadow-sm">
+            <section className="app-card">
               <div className="mb-5">
                 <h2 className="text-xl font-bold text-slate-900">
                   Faturas dos cartões
@@ -572,8 +572,8 @@ export default function InvoicesPage() {
                           <span
                             className={`mt-2 rounded-full px-3 py-1 text-xs font-semibold ${
                               invoice.status === "PAID"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-amber-100 text-amber-700"
+                                ? "app-badge-success"
+                                : "app-badge-warning"
                             }`}
                           >
                             {invoice.status === "PAID" ? "Paga" : "Aberta"}
@@ -600,7 +600,7 @@ export default function InvoicesPage() {
                                 onChange={(e) =>
                                   handleAccountChange(invoice.id, e.target.value)
                                 }
-                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-slate-400"
+                                className="app-input"
                               >
                                 <option value="">Selecione uma conta</option>
                                 {accounts.map((account) => (
@@ -615,7 +615,7 @@ export default function InvoicesPage() {
                               type="button"
                               onClick={() => handlePayInvoice(invoice.id)}
                               disabled={payingInvoiceId === invoice.id}
-                              className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="app-button-primary disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {payingInvoiceId === invoice.id
                                 ? "Pagando..."
@@ -651,7 +651,7 @@ export default function InvoicesPage() {
                                   </p>
                                 </div>
 
-                                <p className="pl-3 font-bold text-rose-600">
+                                <p className={`pl-3 font-bold ${transaction.isAdjustment ? "app-value-neutral" : "app-value-negative"}`}>
                                   {formatCurrency(Number(transaction.amount))}
                                 </p>
                               </div>
@@ -666,7 +666,7 @@ export default function InvoicesPage() {
             </section>
 
             <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded-3xl bg-white p-6 shadow-sm">
+              <div className="app-card">
                 <h2 className="text-lg font-bold text-slate-900">Resumo do momento</h2>
                 <div className="mt-4 space-y-3 text-sm text-slate-600">
                   <p>
@@ -684,7 +684,7 @@ export default function InvoicesPage() {
                 </div>
               </div>
 
-              <div className="rounded-3xl bg-white p-6 shadow-sm">
+              <div className="app-card">
                 <h2 className="text-lg font-bold text-slate-900">Leitura rápida</h2>
                 <p className="mt-4 text-sm text-slate-600">
                   Use esta página para decidir qual cartão ainda tem folga e qual já está
