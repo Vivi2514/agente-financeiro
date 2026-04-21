@@ -57,6 +57,7 @@ export async function GET() {
         installmentNumber: transaction.installmentNumber,
         installmentTotal: transaction.installmentTotal,
         purchaseGroupId: transaction.purchaseGroupId,
+        isAdjustment: transaction.isAdjustment ?? false,
         date: transaction.date,
         createdAt: transaction.createdAt,
         updatedAt: transaction.updatedAt,
