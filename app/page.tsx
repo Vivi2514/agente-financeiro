@@ -1562,6 +1562,10 @@ export default function DashboardPage() {
     );
   }, [openInvoices]);
 
+  const cardPreviousBalanceTotal = useMemo(() => {
+    return Math.max(openInvoicesTotal - selectedMonthCreditPurchasesTotal, 0);
+  }, [openInvoicesTotal, selectedMonthCreditPurchasesTotal]);
+
   const selectedMonthOpenInvoices = useMemo(() => {
     return openInvoices.filter(
       (invoice) =>
@@ -4834,11 +4838,10 @@ const dataHealthSummary = useMemo(() => {
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
               <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(openInvoicesTotal)}</p>
-              {selectedMonthCreditPurchasesTotal > 0 && (
-                <p className="mt-2 text-xs text-slate-500">
-                  Compras no crédito neste mês: {formatCurrency(selectedMonthCreditPurchasesTotal)}
-                </p>
-              )}
+              <div className="mt-2 space-y-1 text-xs text-slate-500">
+                <p>Gerado neste mês: {formatCurrency(selectedMonthCreditPurchasesTotal)}</p>
+                <p>Saldo anterior do cartão: {formatCurrency(cardPreviousBalanceTotal)}</p>
+              </div>
             </div>
 
             <div className="app-card-soft p-4">
