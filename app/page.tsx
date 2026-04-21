@@ -4131,6 +4131,11 @@ const dataHealthSummary = useMemo(() => {
     const hasNoBalance = currentAccountsBalance <= 0;
     const hasOpenInvoice = openInvoicesTotal > 0;
     const mainCategory: CategoryOutOfPaceItem | null = topCategoriesOutOfPace.length > 0 ? topCategoriesOutOfPace[0] : null;
+    const mainCategoryCategory = mainCategory ? String((mainCategory as CategoryOutOfPaceItem).category) : null;
+    const mainCategoryPaceDifference = mainCategory ? Number((mainCategory as CategoryOutOfPaceItem).paceDifference || 0) : 0;
+    const mainCategoryActionHint = mainCategory ? String((mainCategory as CategoryOutOfPaceItem).actionHint) : null;
+    const mainCategoryRecoveryHint = mainCategory ? String((mainCategory as CategoryOutOfPaceItem).recoveryHint) : null;
+    const mainCategoryPaceStatus = mainCategory ? (mainCategory as CategoryOutOfPaceItem).paceStatus : null;
 
     const focusLabel =
       isCurrentSelectedMonth && (monthClaritySummary.tone === "danger" || monthClaritySummary.tone === "warning")
@@ -4165,7 +4170,7 @@ const dataHealthSummary = useMemo(() => {
       openInvoicesTotal > 0 ? `${formatCurrency(openInvoicesTotal)} em faturas abertas` : null,
       isCurrentSelectedMonth && spentToday > 0 ? `${formatCurrency(spentToday)} gasto hoje` : null,
       mainCategory
-        ? `${mainCategory.category} acima do ritmo em ${formatCurrency(mainCategory.paceDifference)}`
+        ? `${mainCategoryCategory} acima do ritmo em ${formatCurrency(mainCategoryPaceDifference)}`
         : null,
       !isCurrentSelectedMonth && balanceMonth !== 0
         ? `Resultado parcial do mês em ${formatCurrency(balanceMonth)}`
@@ -4211,22 +4216,22 @@ const dataHealthSummary = useMemo(() => {
         tone: "danger" as const,
         status: monthClaritySummary.title,
         alert: mainCategory
-          ? `Você já está ${formatCurrency(mainCategory.paceDifference)} acima do ritmo em ${mainCategory.category}.`
+          ? `Você já está ${formatCurrency(mainCategoryPaceDifference)} acima do ritmo em ${mainCategoryCategory}.`
           : monthClaritySummary.summary,
         focusLabel,
         action: mainCategory
-          ? mainCategory.actionHint
+          ? mainCategoryActionHint
           : isCurrentSelectedMonth
           ? "Segure gastos variáveis hoje"
           : "Reduza gastos variáveis neste mês",
         actionDetail: mainCategory
-          ? mainCategory.recoveryHint
+          ? mainCategoryRecoveryHint
           : "O foco agora é preservar caixa até o mês ganhar folga.",
         actionReason: mainCategory
           ? "Essa categoria é a que mais aumenta a pressão do mês agora."
           : "Seu mês precisa de proteção imediata antes de qualquer outro movimento.",
         actionImpact: mainCategory
-          ? `Se você segurar ${mainCategory.category.toLowerCase()} agora, a pressão do mês começa a ceder mais rápido.`
+          ? `Se você segurar ${String(mainCategoryCategory).toLowerCase()} agora, a pressão do mês começa a ceder mais rápido.`
           : "Menos gasto variável agora significa mais margem para atravessar o mês sem apertar ainda mais o caixa.",
         dailyLimit: dailyLimitText,
         dailyLimitSupport,
@@ -4235,19 +4240,19 @@ const dataHealthSummary = useMemo(() => {
     }
 
     if (mainCategory) {
-      const isOffTrack = mainCategory.paceStatus === "off_track";
+      const isOffTrack = mainCategoryPaceStatus === "off_track";
 
       return {
         tone: isOffTrack ? ("warning" as const) : ("info" as const),
         status: isOffTrack ? "Categoria acelerou" : "Categoria pedindo atenção",
         alert: `Você já está ${formatCurrency(
-          mainCategory.paceDifference
-        )} acima do ritmo em ${mainCategory.category} neste mês.`,
+          mainCategoryPaceDifference
+        )} acima do ritmo em ${mainCategoryCategory} neste mês.`,
         focusLabel,
-        action: mainCategory.actionHint,
-        actionDetail: mainCategory.recoveryHint,
+        action: mainCategoryActionHint,
+        actionDetail: mainCategoryRecoveryHint,
         actionReason: "Focar só nessa frente agora já melhora seu mês sem espalhar atenção.",
-        actionImpact: `Controlar ${mainCategory.category.toLowerCase()} primeiro tende a devolver margem mais rápido do que tentar mexer em várias frentes ao mesmo tempo.`,
+        actionImpact: `Controlar ${String(mainCategoryCategory).toLowerCase()} primeiro tende a devolver margem mais rápido do que tentar mexer em várias frentes ao mesmo tempo.`,
         dailyLimit: dailyLimitText,
         dailyLimitSupport,
         secondaryAlert: quickContext[0] || null,
@@ -4278,7 +4283,7 @@ const dataHealthSummary = useMemo(() => {
         focusLabel: "Principal aprendizado",
         action: "Observe o que mais pressionou seu resultado",
         actionDetail: mainCategory
-          ? `${mainCategory.category} foi a categoria que mais saiu do ritmo neste período.`
+          ? `${mainCategoryCategory} foi a categoria que mais saiu do ritmo neste período.`
           : "Seu fechamento está estável e pode servir de referência para os próximos meses.",
         actionReason: "Quando você aprende com o mês fechado, decide melhor antes do problema aparecer de novo.",
         actionImpact: "Esse fechamento vira base para metas mais realistas e alertas mais úteis daqui para frente.",
