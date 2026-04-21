@@ -22,6 +22,7 @@ type InvoiceTransaction = {
   amount: number;
   category?: string | null;
   date: string;
+  isAdjustment?: boolean | null;
 };
 
 type Invoice = {
@@ -101,6 +102,14 @@ function getCategoryLabel(category?: string | null) {
     default:
       return category || "📦 Outros";
   }
+}
+
+function getInvoiceTransactionCategoryLabel(transaction: InvoiceTransaction) {
+  if (transaction.isAdjustment) {
+    return "🛠️ Ajuste inicial do cartão";
+  }
+
+  return getCategoryLabel(transaction.category);
 }
 
 function getUsageStyles(usagePercent: number | null) {
@@ -546,7 +555,9 @@ export default function InvoicesPage() {
                       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                         <div>
                           <h3 className="text-xl font-bold text-slate-900">
-                            {invoice.card?.name || cards.find((card) => card.id === invoice.cardId)?.name || "Cartão"}
+                            {invoice.card?.name ||
+                              cards.find((card) => card.id === invoice.cardId)?.name ||
+                              "Cartão"}
                           </h3>
                           <p className="text-sm text-slate-500">
                             {getInvoiceLabel(invoice.month, invoice.year)}
@@ -635,7 +646,7 @@ export default function InvoicesPage() {
                                     {transaction.title}
                                   </p>
                                   <p className="text-sm text-slate-500">
-                                    {getCategoryLabel(transaction.category)} •{" "}
+                                    {getInvoiceTransactionCategoryLabel(transaction)} •{" "}
                                     {new Date(transaction.date).toLocaleDateString("pt-BR")}
                                   </p>
                                 </div>
