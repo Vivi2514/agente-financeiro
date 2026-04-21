@@ -204,31 +204,24 @@ export default function AccountsPage() {
   return (
     <main className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="mx-auto max-w-6xl space-y-6">
-        <header className="rounded-3xl bg-white p-6 shadow-sm">
+        <header className="app-card">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-500">
-                Contas e cartões
-              </p>
-              <h1 className="text-3xl font-bold text-slate-900">
-                Gerenciar contas e cartões
-              </h1>
+              <p className="app-subtitle">Contas e cartões</p>
+              <h1 className="app-title">Gerenciar contas e cartões</h1>
               <p className="mt-1 text-sm text-slate-500">
                 Cadastre suas contas bancárias e cartões de crédito
               </p>
             </div>
 
-            <Link
-              href="/"
-              className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-            >
+            <Link href="/" className="app-button-secondary inline-flex items-center">
               ← Voltar para home
             </Link>
           </div>
         </header>
 
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <h2 className="text-xl font-bold text-slate-900">Criar conta</h2>
             <p className="mt-1 text-sm text-slate-500">
               Adicione uma conta para movimentações e pagamento de faturas
@@ -239,25 +232,25 @@ export default function AccountsPage() {
                 placeholder="Nome"
                 value={accountName}
                 onChange={(e) => setAccountName(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
               <input
                 placeholder="Banco"
                 value={accountBank}
                 onChange={(e) => setAccountBank(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
               <input
                 placeholder="Saldo"
                 value={accountBalance}
                 onChange={(e) => setAccountBalance(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
 
               <button
                 onClick={createAccount}
                 disabled={savingAccount}
-                className="w-full rounded-2xl bg-slate-900 px-4 py-3 font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="app-button-primary w-full disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {savingAccount ? "Salvando..." : "Salvar conta"}
               </button>
@@ -275,14 +268,13 @@ export default function AccountsPage() {
               ) : (
                 <div className="mt-3 space-y-3">
                   {accounts.map((acc) => (
-                    <div
-                      key={acc.id}
-                      className="rounded-2xl border border-slate-100 p-4"
-                    >
+                    <div key={acc.id} className="app-card-soft border border-slate-100 p-4">
                       <p className="font-semibold text-slate-900">{acc.name}</p>
                       <p className="text-sm text-slate-500">
                         {acc.type || "Conta"} •{" "}
-                        {formatCurrency(Number(acc.balance))}
+                        <span className="app-value-neutral">
+                          {formatCurrency(Number(acc.balance))}
+                        </span>
                       </p>
                     </div>
                   ))}
@@ -291,7 +283,7 @@ export default function AccountsPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="app-card">
             <h2 className="text-xl font-bold text-slate-900">Criar cartão</h2>
             <p className="mt-1 text-sm text-slate-500">
               Cadastre o cartão para compras no crédito e geração de faturas
@@ -302,31 +294,31 @@ export default function AccountsPage() {
                 placeholder="Nome do cartão"
                 value={cardName}
                 onChange={(e) => setCardName(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
               <input
                 placeholder="Limite"
                 value={cardLimit}
                 onChange={(e) => setCardLimit(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
               <input
                 placeholder="Dia fechamento (ex: 10)"
                 value={closingDay}
                 onChange={(e) => setClosingDay(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
               <input
                 placeholder="Dia vencimento (ex: 15)"
                 value={dueDay}
                 onChange={(e) => setDueDay(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400"
+                className="app-input"
               />
 
               <button
                 onClick={createCard}
                 disabled={savingCard}
-                className="w-full rounded-2xl bg-slate-900 px-4 py-3 font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="app-button-primary w-full disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {savingCard ? "Salvando..." : "Salvar cartão"}
               </button>
@@ -351,7 +343,7 @@ export default function AccountsPage() {
                     return (
                       <div
                         key={card.id}
-                        className="rounded-2xl border border-slate-100 p-4"
+                        className="app-card-soft border border-slate-100 p-4"
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div>
@@ -364,41 +356,41 @@ export default function AccountsPage() {
                           </div>
 
                           <span
-                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            className={
                               isDanger
-                                ? "bg-rose-100 text-rose-700"
+                                ? "app-badge-danger"
                                 : isWarning
-                                ? "bg-amber-100 text-amber-700"
-                                : "bg-emerald-100 text-emerald-700"
-                            }`}
+                                ? "app-badge-warning"
+                                : "app-badge-success"
+                            }
                           >
                             {card.usagePercent.toFixed(0)}% usado
                           </span>
                         </div>
 
                         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                          <div className="rounded-xl bg-slate-50 p-3">
+                          <div className="rounded-xl bg-white p-3 border border-slate-100">
                             <p className="text-xs text-slate-500">Limite total</p>
                             <p className="mt-1 font-bold text-slate-900">
                               {formatCurrency(card.limit)}
                             </p>
                           </div>
 
-                          <div className="rounded-xl bg-slate-50 p-3">
+                          <div className="rounded-xl bg-white p-3 border border-slate-100">
                             <p className="text-xs text-slate-500">Usado</p>
-                            <p className="mt-1 font-bold text-rose-600">
+                            <p className="mt-1 app-value-negative">
                               {formatCurrency(card.used)}
                             </p>
                           </div>
 
-                          <div className="rounded-xl bg-slate-50 p-3">
+                          <div className="rounded-xl bg-white p-3 border border-slate-100">
                             <p className="text-xs text-slate-500">Disponível</p>
                             <p
-                              className={`mt-1 font-bold ${
+                              className={
                                 card.available >= 0
-                                  ? "text-emerald-600"
-                                  : "text-rose-600"
-                              }`}
+                                  ? "mt-1 app-value-positive"
+                                  : "mt-1 app-value-negative"
+                              }
                             >
                               {formatCurrency(card.available)}
                             </p>
@@ -406,15 +398,15 @@ export default function AccountsPage() {
                         </div>
 
                         <div className="mt-4">
-                          <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                          <div className="app-progress-bg">
                             <div
-                              className={`h-full rounded-full ${
+                              className={
                                 isDanger
-                                  ? "bg-rose-500"
+                                  ? "app-progress-danger"
                                   : isWarning
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
-                              }`}
+                                  ? "app-progress-warning"
+                                  : "app-progress-success"
+                              }
                               style={{
                                 width: `${Math.min(card.usagePercent, 100)}%`,
                               }}
