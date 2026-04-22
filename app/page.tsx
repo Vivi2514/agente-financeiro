@@ -5015,7 +5015,7 @@ const dataHealthSummary = useMemo(() => {
           <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo hoje</p>
-              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight text-slate-900 lg:text-xl xl:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
             </div>
 
             <div className="app-card-soft p-4">
@@ -5062,25 +5062,25 @@ const dataHealthSummary = useMemo(() => {
             </span>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo inicial</p>
-              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight text-slate-900 lg:text-xl xl:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
             </div>
 
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Entradas previstas</p>
-              <p className="mt-2 text-xl font-bold text-emerald-600 md:text-2xl">{formatCurrency(projectedMonthIncomeTotal)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight text-emerald-600 lg:text-xl xl:text-2xl">{formatCurrency(projectedMonthIncomeTotal)}</p>
             </div>
 
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saídas em conta</p>
-              <p className="mt-2 text-xl font-bold text-rose-600 md:text-2xl">{formatCurrency(projectedMonthCashExpensesTotal)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight text-rose-600 lg:text-xl xl:text-2xl">{formatCurrency(projectedMonthCashExpensesTotal)}</p>
             </div>
 
             <div className="app-card-soft p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas do mês</p>
-              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(projectedMonthInvoiceTotal)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight text-slate-900 lg:text-xl xl:text-2xl">{formatCurrency(projectedMonthInvoiceTotal)}</p>
             </div>
 
             <div className="app-card-soft p-4">
