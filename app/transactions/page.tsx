@@ -427,25 +427,45 @@ export default function TransactionsPage() {
     }
   }, [paymentMethod, specialType]);
 
+  const monthTransactions = useMemo(() => {
+    if (!selectedMonthValue) return transactions;
+
+    const [selectedYear, selectedMonth] = selectedMonthValue
+      .split("-")
+      .map(Number);
+
+    return transactions.filter((transaction) => {
+      const transactionDateRaw = transaction.date || transaction.createdAt || "";
+      const transactionDateOnly = normalizeDateOnly(transactionDateRaw);
+
+      if (!transactionDateOnly) return false;
+
+      return (
+        transactionDateOnly.getFullYear() === selectedYear &&
+        transactionDateOnly.getMonth() + 1 === selectedMonth
+      );
+    });
+  }, [transactions, selectedMonthValue]);
+
   const totalIncome = useMemo(() => {
-    return transactions
+    return monthTransactions
       .filter(
         (transaction) =>
           normalizeTransactionType(transaction.type) === "income" &&
           !isAdjustmentTransaction(transaction)
       )
       .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
-  }, [transactions]);
+  }, [monthTransactions]);
 
   const totalExpense = useMemo(() => {
-    return transactions
+    return monthTransactions
       .filter(
         (transaction) =>
           normalizeTransactionType(transaction.type) === "expense" &&
           !isAdjustmentTransaction(transaction)
       )
       .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
-  }, [transactions]);
+  }, [monthTransactions]);
 
   const balance = useMemo(() => {
     return totalIncome - totalExpense;
