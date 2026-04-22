@@ -5013,12 +5013,12 @@ const dataHealthSummary = useMemo(() => {
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo hoje</p>
-              <p className="mt-2 text-lg font-bold leading-tight text-slate-900 lg:text-xl xl:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight tracking-tight text-slate-900 sm:text-xl lg:text-[1.65rem]">{formatCurrency(currentAccountsBalance)}</p>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado real do mês</p>
               <p className={`mt-2 text-xl font-bold md:text-2xl ${realBalanceMonth >= 0 ? "app-value-positive" : "app-value-negative"}`}>{formatCurrency(realBalanceMonth)}</p>
               <p className="mt-2 text-xs text-slate-500">
@@ -5026,7 +5026,7 @@ const dataHealthSummary = useMemo(() => {
               </p>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
               <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(openInvoicesTotal)}</p>
               <div className="mt-2 space-y-1 text-xs text-slate-500">
@@ -5035,7 +5035,7 @@ const dataHealthSummary = useMemo(() => {
               </div>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gasto seguro</p>
               <p className={`mt-2 text-xl font-bold md:text-2xl ${spendingCapacitySummary.extraSafeSpend > 0 ? "text-sky-700" : "app-value-negative"}`}>{formatCurrency(spendingCapacitySummary.extraSafeSpend)}</p>
             </div>
@@ -5062,28 +5062,28 @@ const dataHealthSummary = useMemo(() => {
             </span>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-            <div className="app-card-soft p-4">
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo inicial</p>
-              <p className="mt-2 text-lg font-bold leading-tight text-slate-900 lg:text-xl xl:text-2xl">{formatCurrency(currentAccountsBalance)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight tracking-tight text-slate-900 sm:text-xl lg:text-[1.65rem]">{formatCurrency(currentAccountsBalance)}</p>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Entradas previstas</p>
-              <p className="mt-2 text-lg font-bold leading-tight text-emerald-600 lg:text-xl xl:text-2xl">{formatCurrency(projectedMonthIncomeTotal)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight tracking-tight text-emerald-600 sm:text-xl lg:text-[1.65rem]">{formatCurrency(projectedMonthIncomeTotal)}</p>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saídas em conta</p>
-              <p className="mt-2 text-lg font-bold leading-tight text-rose-600 lg:text-xl xl:text-2xl">{formatCurrency(projectedMonthCashExpensesTotal)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight tracking-tight text-rose-600 sm:text-xl lg:text-[1.65rem]">{formatCurrency(projectedMonthCashExpensesTotal)}</p>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas do mês</p>
-              <p className="mt-2 text-lg font-bold leading-tight text-slate-900 lg:text-xl xl:text-2xl">{formatCurrency(projectedMonthInvoiceTotal)}</p>
+              <p className="mt-2 text-lg font-bold leading-tight tracking-tight text-slate-900 sm:text-xl lg:text-[1.65rem]">{formatCurrency(projectedMonthInvoiceTotal)}</p>
             </div>
 
-            <div className="app-card-soft p-4">
+            <div className="app-card-soft min-w-0 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Sobra projetada</p>
               <p className={`mt-2 text-xl font-bold md:text-2xl ${projectedMonthClosingBalance >= 0 ? "text-sky-700" : "app-value-negative"}`}>{formatCurrency(projectedMonthClosingBalance)}</p>
             </div>
@@ -5209,14 +5209,14 @@ const dataHealthSummary = useMemo(() => {
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo atual</p>
                 <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">
                   {formatCurrency(currentAccountsBalance)}
                 </p>
               </div>
 
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Próxima entrada</p>
                 <p className="mt-2 text-sm font-bold text-slate-900 md:text-base">
                   {nextIncomeForecast.nextIncome.title}
@@ -5226,14 +5226,14 @@ const dataHealthSummary = useMemo(() => {
                 </p>
               </div>
 
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo projetado</p>
                 <p className={`mt-2 text-xl font-bold md:text-2xl ${nextIncomeForecast.projectedBalance >= 0 ? "text-indigo-700" : "app-value-negative"}`}>
                   {formatCurrency(nextIncomeForecast.projectedBalance)}
                 </p>
               </div>
 
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pode gastar até lá</p>
                 <p className={`mt-2 text-xl font-bold md:text-2xl ${nextIncomeForecast.safeToSpend > 0 ? "text-sky-700" : "app-value-negative"}`}>
                   {formatCurrency(nextIncomeForecast.safeToSpend)}
@@ -5465,7 +5465,7 @@ const dataHealthSummary = useMemo(() => {
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   Entradas vs previsto
                 </p>
@@ -5478,7 +5478,7 @@ const dataHealthSummary = useMemo(() => {
                 </p>
               </div>
 
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   Saídas vs previsto
                 </p>
@@ -5491,7 +5491,7 @@ const dataHealthSummary = useMemo(() => {
                 </p>
               </div>
 
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   Impacto no saldo
                 </p>
@@ -5504,7 +5504,7 @@ const dataHealthSummary = useMemo(() => {
                 </p>
               </div>
 
-              <div className="app-card-soft p-4">
+              <div className="app-card-soft min-w-0 p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   Cumprimento de datas
                 </p>
