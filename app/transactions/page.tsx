@@ -72,6 +72,29 @@ type EditFormState = {
   isFixed: boolean;
 };
 
+type TransactionPayload = {
+  title: string;
+  amount: number;
+  type: "income" | "expense";
+  category: string | null;
+  paymentMethod: PaymentMethod | "credit_card";
+  creditMode: CreditMode | null;
+  installments: number;
+  accountId: string | null;
+  cardId: string | null;
+  isFixed: boolean;
+  isAdjustment: boolean;
+  createdAt: string;
+};
+
+type ExpenseBlockModalState = {
+  open: boolean;
+  amount: number;
+  projectedBalance: number;
+  daysImpact: number;
+  payload: TransactionPayload | null;
+};
+
 const EXPENSE_CATEGORIES = [
   { label: "🍔 Alimentação", value: "Alimentação" },
   { label: "🚗 Transporte", value: "Transporte" },
@@ -300,6 +323,14 @@ export default function TransactionsPage() {
   const [sortBy, setSortBy] = useState<"date" | "amount" | "title">("date");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [expenseBlockModal, setExpenseBlockModal] = useState<ExpenseBlockModalState>({
+    open: false,
+    amount: 0,
+    projectedBalance: 0,
+    daysImpact: 0,
+    payload: null,
+  });
+
 
   const categoryOptions =
     type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
@@ -774,6 +805,95 @@ export default function TransactionsPage() {
     setSelectedMonthValue(getMonthInputValue(new Date()));
   }
 
+  function resetTransactionForm() {
+    setTitle("");
+    setAmountInput("R$ 0,00");
+    setType("expense");
+    setCategory("Alimentação");
+    setPaymentMethod("pix");
+    setCreditMode("avista");
+    setInstallments("2");
+    setAccountId("");
+    setCardId("");
+    setSpecialType("normal");
+    setIsFixed(false);
+  }
+
+  function getExpenseBlockSnapshot(amount: number) {
+    const projectedBalance = balance - amount;
+    const baseDailyProgress = 10;
+    const daysImpact = Math.max(1, Math.ceil(amount / baseDailyProgress));
+    const availableBalance = Math.max(balance, 0);
+    const consumesLargePartOfBalance =
+      availableBalance > 0 ? amount >= availableBalance * 0.4 : amount >= 50;
+    const isRelevantExpense = amount >= 50;
+    const shouldBlock =
+      projectedBalance < 0 || consumesLargePartOfBalance || isRelevantExpense;
+
+    return {
+      projectedBalance,
+      daysImpact,
+      shouldBlock,
+    };
+  }
+
+  async function createTransaction(payload: TransactionPayload) {
+    try {
+      setSubmitting(true);
+
+      const response = await fetch("/api/transactions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || "Erro ao criar transação");
+      }
+
+      resetTransactionForm();
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível criar a transação."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function confirmBlockedExpense() {
+    if (!expenseBlockModal.payload) return;
+
+    const payload = expenseBlockModal.payload;
+
+    setExpenseBlockModal({
+      open: false,
+      amount: 0,
+      projectedBalance: 0,
+      daysImpact: 0,
+      payload: null,
+    });
+
+    await createTransaction(payload);
+  }
+
+  function cancelBlockedExpense() {
+    setExpenseBlockModal({
+      open: false,
+      amount: 0,
+      projectedBalance: 0,
+      daysImpact: 0,
+      payload: null,
+    });
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
 
@@ -827,76 +947,53 @@ export default function TransactionsPage() {
       return;
     }
 
-    try {
-      setSubmitting(true);
+    const payload: TransactionPayload = {
+      title: title.trim(),
+      amount,
+      type: isCardAdjustment ? "expense" : type,
+      category: isCardAdjustment ? null : category || "Outros",
+      paymentMethod: isCardAdjustment ? "credit_card" : paymentMethod,
+      creditMode:
+        !isCardAdjustment && paymentMethod === "credit_card" ? creditMode : null,
+      installments:
+        !isCardAdjustment &&
+        paymentMethod === "credit_card" &&
+        creditMode === "parcelado"
+          ? Number(installments)
+          : 1,
+      accountId:
+        isCardAdjustment ||
+        paymentMethod === "credit_card" ||
+        paymentMethod === "voucher"
+          ? null
+          : accountId || null,
+      cardId:
+        isCardAdjustment || paymentMethod === "credit_card"
+          ? cardId || null
+          : null,
+      isFixed: isCardAdjustment ? false : type === "expense" ? isFixed : false,
+      isAdjustment: isCardAdjustment,
+      createdAt: createdAt
+        ? new Date(`${createdAt}T12:00:00`).toISOString()
+        : new Date().toISOString(),
+    };
 
-      const payload = {
-        title: title.trim(),
-        amount,
-        type: isCardAdjustment ? "expense" : type,
-        category: isCardAdjustment ? null : category || "Outros",
-        paymentMethod: isCardAdjustment ? "credit_card" : paymentMethod,
-        creditMode:
-          !isCardAdjustment && paymentMethod === "credit_card" ? creditMode : null,
-        installments:
-          !isCardAdjustment &&
-          paymentMethod === "credit_card" &&
-          creditMode === "parcelado"
-            ? Number(installments)
-            : 1,
-        accountId:
-          isCardAdjustment ||
-          paymentMethod === "credit_card" ||
-          paymentMethod === "voucher"
-            ? null
-            : accountId || null,
-        cardId:
-          isCardAdjustment || paymentMethod === "credit_card"
-            ? cardId || null
-            : null,
-        isFixed: isCardAdjustment ? false : type === "expense" ? isFixed : false,
-        isAdjustment: isCardAdjustment,
-        createdAt: createdAt
-          ? new Date(`${createdAt}T12:00:00`).toISOString()
-          : new Date().toISOString(),
-      };
+    if (!isCardAdjustment && type === "expense") {
+      const snapshot = getExpenseBlockSnapshot(amount);
 
-      const response = await fetch("/api/transactions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.error || "Erro ao criar transação");
+      if (snapshot.shouldBlock) {
+        setExpenseBlockModal({
+          open: true,
+          amount,
+          projectedBalance: snapshot.projectedBalance,
+          daysImpact: snapshot.daysImpact,
+          payload,
+        });
+        return;
       }
-
-      setTitle("");
-      setAmountInput("R$ 0,00");
-      setType("expense");
-      setCategory("Alimentação");
-      setPaymentMethod("pix");
-      setCreditMode("avista");
-      setInstallments("2");
-      setAccountId("");
-      setCardId("");
-      setSpecialType("normal");
-      setIsFixed(false);
-
-      await loadData();
-    } catch (error) {
-      console.error(error);
-      alert(
-        error instanceof Error
-          ? error.message
-          : "Não foi possível criar a transação."
-      );
-    } finally {
-      setSubmitting(false);
     }
+
+    await createTransaction(payload);
   }
 
   function startEditing(transaction: Transaction) {
@@ -2061,6 +2158,105 @@ export default function TransactionsPage() {
           </div>
         </section>
       </div>
+
+      {expenseBlockModal.open && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-md overflow-hidden rounded-[2rem] border border-rose-200 bg-white shadow-2xl">
+            <div className="bg-slate-950 px-5 py-5 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-rose-200">
+                    Freio ativado
+                  </p>
+                  <h3 className="mt-2 text-xl font-black leading-tight">
+                    Esse gasto pede uma decisão consciente
+                  </h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    Antes de salvar, o app está mostrando o impacto desse lançamento no seu plano anti-dívida.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={cancelBlockedExpense}
+                  className="shrink-0 rounded-full border border-white/20 px-3 py-2 text-xs font-bold text-white transition hover:bg-white/10"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                    Valor
+                  </p>
+                  <p className="mt-1 text-sm font-black text-slate-950">
+                    {formatCurrency(expenseBlockModal.amount)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                    Saldo após
+                  </p>
+                  <p
+                    className={`mt-1 text-sm font-black ${
+                      expenseBlockModal.projectedBalance < 0
+                        ? "text-rose-600"
+                        : "text-slate-950"
+                    }`}
+                  >
+                    {formatCurrency(expenseBlockModal.projectedBalance)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-rose-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-rose-500">
+                    Dias perdidos
+                  </p>
+                  <p className="mt-1 text-sm font-black text-rose-700">
+                    {expenseBlockModal.daysImpact} dia(s)
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+                <p className="font-black">Esse gasto pode atrapalhar sua missão.</p>
+                <div className="mt-2 space-y-1">
+                  <p>• Ele consome uma parte importante do dinheiro disponível.</p>
+                  {expenseBlockModal.projectedBalance < 0 ? (
+                    <p>• Depois dele, o saldo do mês fica negativo.</p>
+                  ) : (
+                    <p>• Depois dele, sobram {formatCurrency(expenseBlockModal.projectedBalance)} no mês.</p>
+                  )}
+                  <p>• Sua quitação pode atrasar cerca de {expenseBlockModal.daysImpact} dia(s).</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={cancelBlockedExpense}
+                  className="rounded-3xl border border-slate-200 bg-white px-4 py-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={confirmBlockedExpense}
+                  disabled={submitting}
+                  className="rounded-3xl bg-slate-950 px-4 py-4 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? "Salvando..." : "Continuar mesmo assim"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

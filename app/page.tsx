@@ -4,6 +4,7 @@
 import LogoutButton from "@/components/logout-button";
 import { createCardInitialBalance } from "@/app/actions";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   PieChart,
@@ -174,6 +175,8 @@ type ActionCenterAlert = {
   priority: number;
   priorityLabel: "Urgente agora" | "Agir hoje" | "Acompanhar";
 };
+
+type DashboardTab = "agora" | "projecao" | "cartoes" | "divida";
 
 const COLORS = [
   "#6366f1",
@@ -654,6 +657,7 @@ function CustomDailyBalanceTooltip({ active, payload }: any) {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
@@ -708,6 +712,26 @@ export default function DashboardPage() {
   const [initialBalanceAmount, setInitialBalanceAmount] = useState("");
   const [initialBalanceDate, setInitialBalanceDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [initialBalanceSubmitting, setInitialBalanceSubmitting] = useState(false);
+  const [dashboardTab, setDashboardTab] = useState<DashboardTab>("agora");
+  const [quickActionModalOpen, setQuickActionModalOpen] = useState(false);
+  const [cofrinho, setCofrinho] = useState(0);
+  const [monthlyPocketGoal, setMonthlyPocketGoal] = useState(300);
+  const [currentDebtTarget, setCurrentDebtTarget] = useState(2063);
+  const [impactExpenseInput, setImpactExpenseInput] = useState("");
+  const [monthlyPocketSaved, setMonthlyPocketSaved] = useState(0);
+  const [pocketSuggestionModalOpen, setPocketSuggestionModalOpen] = useState(false);
+  const [lastPocketHandledIncomeId, setLastPocketHandledIncomeId] = useState("");
+  const [expenseBlockModal, setExpenseBlockModal] = useState<{
+    open: boolean;
+    amount: number;
+    snapshot: ReturnType<typeof getExpenseImpactSnapshot> | null;
+    source: "quick_new" | "launcher" | "simulation";
+  }>({
+    open: false,
+    amount: 0,
+    snapshot: null,
+    source: "quick_new",
+  });
 
   function showToast(
     title: string,
@@ -722,6 +746,134 @@ export default function DashboardPage() {
     });
   }
 
+  function parseCurrencyInput(value: string) {
+    const normalized = value
+      .replace(/\s/g, "")
+      .replace("R$", "")
+      .replace(/\./g, "")
+      .replace(",", ".")
+      .trim();
+
+    return Number(normalized || 0);
+  }
+
+  function getExpenseImpactSnapshot(amount: number) {
+    const safeDailyLimit = Math.max(spendingCapacitySummary.safeDailySpend, 0);
+    const dailyDebtProgress = Math.max(monthlyPocketGoal / 30, 1);
+    const remainingAfterExpense = safeDailyLimit - amount;
+    const daysLost = Math.max(1, Math.ceil(amount / dailyDebtProgress));
+    const usesPocket = amount > Math.max(availableBalanceExcludingPocket, 0) || remainingAfterExpense < 0;
+    const nextAvailableToday = Math.max(remainingAfterExpense, 0);
+
+    return {
+      safeDailyLimit,
+      remainingAfterExpense,
+      nextAvailableToday,
+      daysLost,
+      usesPocket,
+      dailyDebtProgress,
+    };
+  }
+
+  function handlePocketSave(amount: number) {
+    const safeAmount = Math.max(Math.round(Number(amount || 0)), 0);
+
+    if (safeAmount <= 0) {
+      showToast(
+        "Sugestão indisponível",
+        "Não há valor seguro para guardar no cofrinho agora.",
+        "info"
+      );
+      return;
+    }
+
+    setCofrinho((current) => current + safeAmount);
+    setMonthlyPocketSaved((current) => current + safeAmount);
+    setPocketSuggestionModalOpen(false);
+
+    if (latestIncomeForPocketModal?.id) {
+      setLastPocketHandledIncomeId(latestIncomeForPocketModal.id);
+    }
+
+    showToast(
+      "Dinheiro protegido",
+      `Você guardou ${formatCurrency(safeAmount)} no cofrinho e encurtou o caminho da quitação.`,
+      "success"
+    );
+  }
+
+  function handlePocketModalDismiss() {
+    setPocketSuggestionModalOpen(false);
+
+    if (latestIncomeForPocketModal?.id) {
+      setLastPocketHandledIncomeId(latestIncomeForPocketModal.id);
+    }
+  }
+
+  function showExpenseImpactFeedback(amount: number, contextLabel?: string) {
+    const snapshot = getExpenseImpactSnapshot(amount);
+    const prefix = contextLabel ? `${contextLabel}. ` : "";
+
+    if (snapshot.usesPocket) {
+      showToast(
+        "Freio ativado",
+        `${prefix}Esse gasto consome o limite do dia e pode atrasar sua quitação em ${snapshot.daysLost} dia(s).`,
+        "error"
+      );
+      return;
+    }
+
+    showToast(
+      "Impacto do gasto",
+      `${prefix}Depois desse valor, ainda restam ${formatCurrency(snapshot.nextAvailableToday)} hoje e sua missão perde ${snapshot.daysLost} dia(s).`,
+      "info"
+    );
+  }
+
+  function openExpenseGuardModal(amount: number, source: "quick_new" | "launcher" | "simulation" = "quick_new") {
+    const snapshot = getExpenseImpactSnapshot(amount);
+
+    setExpenseBlockModal({
+      open: true,
+      amount,
+      snapshot,
+      source,
+    });
+  }
+
+  function closeExpenseGuardModal() {
+    setExpenseBlockModal({
+      open: false,
+      amount: 0,
+      snapshot: null,
+      source: "quick_new",
+    });
+  }
+
+  function openQuickActionModal() {
+    setQuickActionModalOpen(true);
+  }
+
+  function closeQuickActionModal() {
+    setQuickActionModalOpen(false);
+  }
+
+  function goToTransactionsWithQuickMode(mode: "expense" | "income" | "future" = "expense") {
+    closeQuickActionModal();
+    const query = mode === "expense" ? "" : `?quickMode=${mode}`;
+    router.push(`/transactions${query}`);
+  }
+
+  function handleOpenTransactionLauncher() {
+    openQuickActionModal();
+  }
+
+  function handleProceedAfterExpenseGuard() {
+    const amount = expenseBlockModal.amount;
+    closeExpenseGuardModal();
+    router.push(amount > 0 ? `/transactions?suggestedExpense=${encodeURIComponent(String(amount))}` : "/transactions");
+  }
+
 
   async function handleConfirmTransaction(transaction: Transaction) {
     try {
@@ -732,14 +884,7 @@ export default function DashboardPage() {
 
       if (amountInput === null) return;
 
-      const normalizedAmount = amountInput
-        .replace(/\s/g, "")
-        .replace("R$", "")
-        .replace(/\./g, "")
-        .replace(",", ".")
-        .trim();
-
-      const parsedAmount = Number(normalizedAmount || 0);
+      const parsedAmount = parseCurrencyInput(amountInput);
 
       if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
         showToast(
@@ -783,11 +928,18 @@ export default function DashboardPage() {
 
       await loadDashboardData();
 
-      showToast(
-        "Transação confirmada",
-        "A transação foi marcada como realizada e já impacta seu saldo real.",
-        "success"
-      );
+      if (isExpenseType(transaction.type)) {
+        showExpenseImpactFeedback(
+          parsedAmount,
+          "Transação confirmada no saldo real"
+        );
+      } else {
+        showToast(
+          "Transação confirmada",
+          "A transação foi marcada como realizada e já impacta seu saldo real.",
+          "success"
+        );
+      }
     } catch (error) {
       showToast(
         "Erro ao confirmar",
@@ -1015,6 +1167,57 @@ export default function DashboardPage() {
   useEffect(() => {
     loadDashboardData();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const savedCofrinho = Number(window.localStorage.getItem("finance-app:cofrinho") || 0);
+    const savedMonthlyPocketGoal = Number(window.localStorage.getItem("finance-app:monthly-pocket-goal") || 300);
+    const savedCurrentDebtTarget = Number(window.localStorage.getItem("finance-app:current-debt-target") || 2063);
+    const savedMonthlyPocketSaved = Number(window.localStorage.getItem(`finance-app:monthly-pocket-saved:${getMonthInputValue(new Date())}`) || 0);
+    const savedLastPocketHandledIncomeId = window.localStorage.getItem(`finance-app:last-pocket-income:${getMonthInputValue(new Date())}`) || "";
+
+    setCofrinho(Number.isFinite(savedCofrinho) ? savedCofrinho : 0);
+    setMonthlyPocketGoal(Number.isFinite(savedMonthlyPocketGoal) && savedMonthlyPocketGoal > 0 ? savedMonthlyPocketGoal : 300);
+    setCurrentDebtTarget(Number.isFinite(savedCurrentDebtTarget) && savedCurrentDebtTarget > 0 ? savedCurrentDebtTarget : 2063);
+    setMonthlyPocketSaved(Number.isFinite(savedMonthlyPocketSaved) ? savedMonthlyPocketSaved : 0);
+    setLastPocketHandledIncomeId(savedLastPocketHandledIncomeId);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("finance-app:cofrinho", String(cofrinho));
+  }, [cofrinho]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("finance-app:monthly-pocket-goal", String(monthlyPocketGoal));
+  }, [monthlyPocketGoal]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(`finance-app:monthly-pocket-saved:${selectedMonth}`, String(monthlyPocketSaved));
+  }, [monthlyPocketSaved, selectedMonth]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(`finance-app:last-pocket-income:${selectedMonth}`, lastPocketHandledIncomeId);
+  }, [lastPocketHandledIncomeId, selectedMonth]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const savedMonthlyPocketSaved = Number(window.localStorage.getItem(`finance-app:monthly-pocket-saved:${selectedMonth}`) || 0);
+    const savedLastPocketHandledIncomeId = window.localStorage.getItem(`finance-app:last-pocket-income:${selectedMonth}`) || "";
+
+    setMonthlyPocketSaved(Number.isFinite(savedMonthlyPocketSaved) ? savedMonthlyPocketSaved : 0);
+    setLastPocketHandledIncomeId(savedLastPocketHandledIncomeId);
+    setPocketSuggestionModalOpen(false);
+  }, [selectedMonth]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("finance-app:current-debt-target", String(currentDebtTarget));
+  }, [currentDebtTarget]);
 
   useEffect(() => {
     const saved = localStorage.getItem(getGoalsStorageKey(selectedMonth));
@@ -4921,6 +5124,99 @@ const dataHealthSummary = useMemo(() => {
     topCategoriesOutOfPace,
   ]);
 
+  const availableBalanceExcludingPocket = useMemo(() => {
+    return currentAccountsBalance - cofrinho;
+  }, [cofrinho, currentAccountsBalance]);
+
+  const debtRemaining = useMemo(() => {
+    return Math.max(currentDebtTarget - cofrinho, 0);
+  }, [cofrinho, currentDebtTarget]);
+
+  const debtProgress = useMemo(() => {
+    if (currentDebtTarget <= 0) return 0;
+    return Math.min((cofrinho / currentDebtTarget) * 100, 100);
+  }, [cofrinho, currentDebtTarget]);
+
+  const pocketSuggestion = useMemo(() => {
+    const remainingGoal = Math.max(monthlyPocketGoal - cofrinho, 0);
+
+    if (remainingGoal <= 0) {
+      return Math.min(Math.max(availableBalanceExcludingPocket, 0), 50);
+    }
+
+    const baseSuggestion = Math.min(
+      remainingGoal,
+      Math.max(availableBalanceExcludingPocket * 0.25, 0)
+    );
+
+    return Math.max(Math.round(baseSuggestion), Math.min(remainingGoal, 50));
+  }, [availableBalanceExcludingPocket, cofrinho, monthlyPocketGoal]);
+
+  const impactPreview = useMemo(() => {
+    const parsedAmount = parseCurrencyInput(impactExpenseInput);
+
+    if (!impactExpenseInput.trim()) {
+      return null;
+    }
+
+    if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      return {
+        valid: false as const,
+        message: "Digite um valor válido para ver o impacto.",
+      };
+    }
+
+    const snapshot = getExpenseImpactSnapshot(parsedAmount);
+
+    return {
+      valid: true as const,
+      amount: parsedAmount,
+      ...snapshot,
+    };
+  }, [impactExpenseInput, availableBalanceExcludingPocket, monthlyPocketGoal, spendingCapacitySummary.safeDailySpend]);
+
+  const latestIncomeForPocketModal = useMemo(() => {
+    return [...realizedMonthTransactions]
+      .filter((transaction) => isIncomeType(transaction.type) && !isAdjustmentTransaction(transaction))
+      .sort(
+        (a, b) =>
+          new Date(getTransactionEffectiveDate(b)).getTime() -
+          new Date(getTransactionEffectiveDate(a)).getTime()
+      )[0] || null;
+  }, [realizedMonthTransactions]);
+
+  const pocketModalSuggestion = useMemo(() => {
+    if (!latestIncomeForPocketModal) return 0;
+
+    const incomeAmount = getTransactionEffectiveAmount(latestIncomeForPocketModal);
+    const remainingGoal = Math.max(monthlyPocketGoal - monthlyPocketSaved, 0);
+
+    if (remainingGoal <= 0) return 0;
+
+    const suggested = Math.max(30, Math.round(incomeAmount * 0.25));
+    return Math.min(remainingGoal, suggested, Math.max(availableBalanceExcludingPocket, 0));
+  }, [availableBalanceExcludingPocket, latestIncomeForPocketModal, monthlyPocketGoal, monthlyPocketSaved]);
+
+  const pocketModalDaysAdvanced = useMemo(() => {
+    if (pocketModalSuggestion <= 0) return 0;
+    const dailyGoal = Math.max(monthlyPocketGoal / 30, 1);
+    return Math.max(1, Math.floor(pocketModalSuggestion / dailyGoal));
+  }, [monthlyPocketGoal, pocketModalSuggestion]);
+
+  useEffect(() => {
+    if (monthlyPocketSaved >= monthlyPocketGoal) {
+      setPocketSuggestionModalOpen(false);
+    }
+  }, [monthlyPocketGoal, monthlyPocketSaved]);
+
+  useEffect(() => {
+    if (!latestIncomeForPocketModal?.id) return;
+    if (monthlyPocketSaved >= monthlyPocketGoal) return;
+    if (lastPocketHandledIncomeId === latestIncomeForPocketModal.id) return;
+
+    setPocketSuggestionModalOpen(true);
+  }, [lastPocketHandledIncomeId, latestIncomeForPocketModal, monthlyPocketGoal, monthlyPocketSaved]);
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 p-2 sm:p-3 md:p-8">
       {toast.visible ? (
@@ -4950,6 +5246,220 @@ const dataHealthSummary = useMemo(() => {
               >
                 Fechar
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {quickActionModalOpen ? (
+        <div className="fixed inset-0 z-[42] flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
+          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Ação rápida</p>
+                  <h3 className="mt-2 text-xl font-bold">O que você quer fazer agora?</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    Escolha uma ação direta. O objetivo é registrar rápido, sem ficar procurando caminhos pela tela.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeQuickActionModal}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3 px-5 py-5">
+              <button
+                type="button"
+                onClick={() => goToTransactionsWithQuickMode("expense")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div>
+                  <p className="text-base font-bold text-slate-900">Registrar gasto</p>
+                  <p className="mt-1 text-sm text-slate-500">Compra, despesa, cartão ou pix.</p>
+                </div>
+                <span className="text-xl text-slate-400">›</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => goToTransactionsWithQuickMode("income")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div>
+                  <p className="text-base font-bold text-slate-900">Entrou dinheiro</p>
+                  <p className="mt-1 text-sm text-slate-500">Salário, devolução, extra ou qualquer entrada.</p>
+                </div>
+                <span className="text-xl text-slate-400">›</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  closeQuickActionModal();
+                  handlePocketSave(pocketSuggestion);
+                }}
+                className="flex w-full items-center justify-between rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left transition hover:bg-emerald-100/70"
+              >
+                <div>
+                  <p className="text-base font-bold text-emerald-900">Guardar no cofrinho</p>
+                  <p className="mt-1 text-sm text-emerald-700">
+                    Sugestão atual: {formatCurrency(pocketSuggestion)}.
+                  </p>
+                </div>
+                <span className="text-xl text-emerald-600">›</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => goToTransactionsWithQuickMode("future")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div>
+                  <p className="text-base font-bold text-slate-900">Agendar lançamento</p>
+                  <p className="mt-1 text-sm text-slate-500">Registrar algo para uma data futura.</p>
+                </div>
+                <span className="text-xl text-slate-400">›</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pocketSuggestionModalOpen && latestIncomeForPocketModal && pocketModalSuggestion > 0 ? (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
+          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Cofrinho inteligente</p>
+                  <h3 className="mt-2 text-xl font-bold">Entrou dinheiro. Guarde uma parte agora.</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    O app detectou uma entrada de {formatCurrency(getTransactionEffectiveAmount(latestIncomeForPocketModal))} e trouxe uma decisão rápida para proteger sua meta.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePocketModalDismiss}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
+                >
+                  Agora não
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta do mês</p>
+                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Já guardado</p>
+                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Sugestão</p>
+                  <p className="mt-1 text-base font-bold text-emerald-700">{formatCurrency(pocketModalSuggestion)}</p>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-sm font-semibold text-amber-900">Se guardar agora, você protege seu plano sem deixar para depois.</p>
+                <p className="mt-1 text-sm text-amber-800">Essa decisão pode adiantar sua quitação em cerca de <span className="font-bold">{pocketModalDaysAdvanced} dia(s)</span>.</p>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={() => handlePocketSave(pocketModalSuggestion)}
+                  className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Guardar {formatCurrency(pocketModalSuggestion)} agora
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePocketModalDismiss}
+                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Decidir depois
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {expenseBlockModal.open && expenseBlockModal.snapshot ? (
+        <div className="fixed inset-0 z-[45] flex items-end justify-center bg-slate-950/50 p-3 sm:items-center">
+          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-rose-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <div className="bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 px-5 py-4 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-rose-200">Freio ativado</p>
+                  <h3 className="mt-2 text-xl font-bold">Esse gasto pede uma decisão consciente</h3>
+                  <p className="mt-2 text-sm text-slate-300">Antes de seguir para o lançamento, o app está te mostrando o impacto real no seu plano anti-dívida.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeExpenseGuardModal}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Valor</p>
+                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(expenseBlockModal.amount)}</p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Sobra hoje</p>
+                  <p className={`mt-1 text-base font-bold ${expenseBlockModal.snapshot.remainingAfterExpense >= 0 ? "text-slate-900" : "text-rose-600"}`}>
+                    {formatCurrency(expenseBlockModal.snapshot.nextAvailableToday)}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-rose-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Dias perdidos</p>
+                  <p className="mt-1 text-base font-bold text-rose-700">{expenseBlockModal.snapshot.daysLost} dia(s)</p>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-3">
+                <p className="text-sm font-semibold text-rose-900">Esse gasto vai consumir seu limite do dia.</p>
+                <ul className="mt-2 space-y-1 text-sm text-rose-800">
+                  <li>• Depois dele, sobram {formatCurrency(expenseBlockModal.snapshot.nextAvailableToday)} hoje.</li>
+                  <li>• Sua missão perde cerca de {expenseBlockModal.snapshot.daysLost} dia(s).</li>
+                  {expenseBlockModal.snapshot.usesPocket ? (
+                    <li>• Ele encosta no dinheiro protegido do cofrinho.</li>
+                  ) : null}
+                </ul>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={closeExpenseGuardModal}
+                  className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleProceedAfterExpenseGuard}
+                  className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Continuar mesmo assim
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4987,62 +5497,299 @@ const dataHealthSummary = useMemo(() => {
       ) : null}
 
       <div className="mx-auto max-w-3xl space-y-4 md:space-y-6">
-        <header className="app-card">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-2xl">
-              <p className="text-sm font-medium text-slate-500">Início</p>
-              <h1 className="mt-1 text-2xl leading-tight font-bold text-slate-900 md:text-3xl">
-                Sua organização financeira, sem excesso
-              </h1>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                Veja seu momento, entenda a próxima ação e entre nos detalhes só quando precisar.
-              </p>
-            </div>
+        <header className="space-y-4">
+          <section className="app-card overflow-hidden border border-slate-200 bg-white">
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="max-w-2xl">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Modo anti-dívida</p>
+                  <h1 className="mt-2 text-2xl font-bold leading-tight text-slate-900 md:text-3xl">
+                    Seu painel de decisão do dia
+                  </h1>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    Abra o app, veja quanto pode gastar, registre o necessário e proteja o cofrinho sem precisar rolar a tela inteira.
+                  </p>
+                </div>
 
-            <div className="flex w-full flex-col gap-3 lg:max-w-xs">
-              <label className="text-sm font-medium text-slate-700">
-                Filtrar por mês
-              </label>
-              <input
-                type="month"
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="app-input text-base placeholder:text-slate-300"
-              />
-            </div>
-          </div>
+                <div className="w-full md:max-w-[180px]">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Mês analisado
+                  </label>
+                  <input
+                    type="month"
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="app-input mt-2 text-base placeholder:text-slate-300"
+                  />
+                </div>
+              </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo hoje</p>
-              <p className="mt-2 whitespace-nowrap text-base font-bold leading-tight tracking-tight text-slate-900 sm:text-lg xl:text-xl">{formatCurrency(currentAccountsBalance)}</p>
-            </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.25fr_0.95fr]">
+                <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-5 text-white shadow-[0_22px_60px_rgba(15,23,42,0.18)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Disponível hoje</p>
+                      <p className={`mt-3 text-4xl font-black tracking-tight ${spendingCapacitySummary.safeDailySpend > 0 ? "text-white" : "text-rose-300"}`}>
+                        {formatCurrency(spendingCapacitySummary.safeDailySpend)}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-300">
+                        Esse é o número principal. Se passar disso hoje, você atrasa sua meta.
+                      </p>
+                    </div>
 
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resultado real do mês</p>
-              <p className={`mt-2 text-xl font-bold md:text-2xl ${realBalanceMonth >= 0 ? "app-value-positive" : "app-value-negative"}`}>{formatCurrency(realBalanceMonth)}</p>
-              <p className="mt-2 text-xs text-slate-500">
-                Considera só Pix, débito, dinheiro e transferências.
-              </p>
-            </div>
+                    <button
+                      type="button"
+                      onClick={handleOpenTransactionLauncher}
+                      className="inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/20"
+                    >
+                      + Novo
+                    </button>
+                  </div>
 
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas abertas</p>
-              <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">{formatCurrency(openInvoicesTotal)}</p>
-              <div className="mt-2 space-y-1 text-xs text-slate-500">
-                <p>Gerado neste mês: {formatCurrency(selectedMonthCreditPurchasesTotal)}</p>
-                <p>Saldo anterior do cartão: {formatCurrency(cardPreviousBalanceTotal)}</p>
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl bg-white/6 p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Disponível real</p>
+                      <p className={`mt-2 text-xl font-bold ${availableBalanceExcludingPocket >= 0 ? "text-sky-300" : "text-rose-300"}`}>
+                        {formatCurrency(availableBalanceExcludingPocket)}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl bg-white/6 p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Faturas abertas</p>
+                      <p className="mt-2 text-xl font-bold text-white">{formatCurrency(openInvoicesTotal)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[28px] border border-amber-200 bg-amber-50 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Missão atual</p>
+                      <h2 className="mt-2 text-xl font-bold text-slate-900">Quitar a menor dívida primeiro</h2>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm">
+                      Dívida primeiro
+                    </span>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl border border-white/80 bg-white/80 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Meta alvo</p>
+                        <p className="mt-1 text-2xl font-bold text-slate-900">{formatCurrency(currentDebtTarget)}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faltam</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(debtRemaining)}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-slate-900 transition-all" style={{ width: `${debtProgress}%` }} />
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cofrinho</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(cofrinho)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta do mês</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white/70 px-3 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Guardado no mês</p>
+                      <p className="mt-1 text-sm font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handlePocketSave(pocketSuggestion)}
+                        className="inline-flex items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                      >
+                        Guardar sugestão ({formatCurrency(pocketSuggestion)})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setCofrinho((current) => Math.max(current - pocketSuggestion, 0)); setMonthlyPocketSaved((current) => Math.max(current - pocketSuggestion, 0)); }}
+                        className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Tirar do cofrinho
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
+          </section>
 
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gasto seguro</p>
-              <p className={`mt-2 text-xl font-bold md:text-2xl ${spendingCapacitySummary.extraSafeSpend > 0 ? "text-sky-700" : "app-value-negative"}`}>{formatCurrency(spendingCapacitySummary.extraSafeSpend)}</p>
+          <section className="app-card sticky top-2 z-20 border border-slate-200 bg-white/95 backdrop-blur">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="inline-flex w-full rounded-full bg-slate-100 p-1 md:w-auto">
+                {([
+                  { key: "agora", label: "Agora" },
+                  { key: "projecao", label: "Projeção" },
+                  { key: "cartoes", label: "Cartões" },
+                  { key: "divida", label: "Dívida" },
+                ] as { key: DashboardTab; label: string }[]).map((tab) => {
+                  const active = dashboardTab === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setDashboardTab(tab.key)}
+                      className={`flex-1 rounded-full px-4 py-2.5 text-sm font-semibold transition md:flex-none ${active ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                  Pagar faturas
+                </Link>
+                <Link href="/intelligence" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                  Inteligência
+                </Link>
+              </div>
             </div>
-          </div>
+          </section>
         </header>
 
+          {dashboardTab === "agora" ? (
+            <section className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_0.9fr]">
+              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                      Agora
+                    </p>
+                    <h2 className="mt-1 text-lg font-bold text-slate-900">
+                      O que fazer hoje
+                    </h2>
+                  </div>
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      spendingCapacitySummary.safeDailySpend > 0
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-rose-100 text-rose-700"
+                    }`}
+                  >
+                    {spendingCapacitySummary.safeDailySpend > 0 ? "Com limite" : "Freio total"}
+                  </span>
+                </div>
 
+                <div className="mt-4 rounded-[24px] bg-slate-950 p-5 text-white">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
+                    Pode gastar hoje
+                  </p>
+                  <p className={`mt-2 text-4xl font-black tracking-tight ${spendingCapacitySummary.safeDailySpend > 0 ? "text-white" : "text-rose-300"}`}>
+                    {formatCurrency(spendingCapacitySummary.safeDailySpend)}
+                  </p>
+                  <p className="mt-2 text-sm leading-5 text-slate-300">
+                    Se passar disso hoje, você atrasa a quitação da menor dívida.
+                  </p>
+                </div>
+
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => handlePocketSave(pocketSuggestion)}
+                    className="inline-flex min-h-[48px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50"
+                  >
+                    Guardar dinheiro no cofrinho
+                  </button>
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <p className="text-sm font-semibold text-amber-900">
+                    {pocketSuggestion > 0
+                      ? `Próximo passo: guardar ${formatCurrency(pocketSuggestion)} no cofrinho.`
+                      : "Meta mínima do cofrinho concluída. Agora é acelerar."}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-amber-800">
+                    O foco é proteger o dinheiro separado e evitar gastos que encostem no cofrinho.
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                      Últimos movimentos
+                    </p>
+                    <h2 className="mt-1 text-lg font-bold text-slate-900">
+                      Só os 3 mais recentes
+                    </h2>
+                  </div>
+                  <Link href="/transactions" className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
+                    Ver extrato
+                  </Link>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {lastTransactions.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">
+                      Nenhum movimento neste mês ainda.
+                    </div>
+                  ) : (
+                    lastTransactions.slice(0, 3).map((transaction) => {
+                      const isIncome = isIncomeType(transaction.type);
+                      const amount = getTransactionEffectiveAmount(transaction);
+                      const transactionDate = getTransactionEffectiveDate(transaction);
+
+                      return (
+                        <div
+                          key={transaction.id}
+                          className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">
+                              {transaction.title}
+                            </p>
+                            <p className="mt-0.5 truncate text-xs text-slate-500">
+                              {getCategoryLabel(transaction.category)} · {transactionDate ? new Date(transactionDate).toLocaleDateString("pt-BR") : "-"}
+                            </p>
+                          </div>
+                          <p className={`shrink-0 text-sm font-bold ${isIncome ? "text-emerald-600" : "text-rose-600"}`}>
+                            {isIncome ? "+ " : "- "}
+                            {formatCurrency(amount)}
+                          </p>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-2xl bg-slate-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Dívida falta
+                    </p>
+                    <p className="mt-1 text-base font-bold text-slate-900">
+                      {formatCurrency(debtRemaining)}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Cofrinho
+                    </p>
+                    <p className="mt-1 text-base font-bold text-slate-900">
+                      {formatCurrency(cofrinho)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
+        {dashboardTab === "projecao" ? (
+          <div className="space-y-4">
         <section className="app-card">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -5260,332 +6007,211 @@ const dataHealthSummary = useMemo(() => {
             </div>
           </section>
         ) : null}
-
-        <section className="app-card">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Assistente financeiro</p>
-              <h2 className="mt-1 text-lg font-bold text-slate-900">Leitura simples do mês</h2>
-            </div>
-            <span
-              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                monthClaritySummary.tone === "danger"
-                  ? "bg-rose-100 text-rose-700"
-                  : monthClaritySummary.tone === "warning"
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-emerald-100 text-emerald-700"
-              }`}
-            >
-              {monthClaritySummary.title}
-            </span>
           </div>
-
-          <div
-            className={`mt-4 rounded-2xl border px-4 py-4 ${
-              assistantSummary.tone === "danger"
-                ? "border-rose-200 bg-rose-50"
-                : assistantSummary.tone === "warning"
-                ? "border-amber-200 bg-amber-50"
-                : assistantSummary.tone === "info"
-                ? "border-sky-200 bg-sky-50"
-                : "border-emerald-200 bg-emerald-50"
-            }`}
-          >
-            <p
-              className={`text-sm font-semibold ${
-                assistantSummary.tone === "danger"
-                  ? "text-rose-900"
-                  : assistantSummary.tone === "warning"
-                  ? "text-amber-900"
-                  : assistantSummary.tone === "info"
-                  ? "text-sky-900"
-                  : "text-emerald-900"
-              }`}
-            >
-              {assistantSummary.status}
-            </p>
-            <p className="mt-1 text-sm text-slate-700">{assistantSummary.alert}</p>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="app-card-soft px-4 py-4">
-              <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{assistantSummary.focusLabel}</p><span className="app-badge-neutral">Prioridade 1</span></div>
-              <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.action}</p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.actionDetail}</p>
-              <p className="mt-2 text-xs font-medium text-slate-700">{assistantSummary.actionReason}</p>
-              <div className="mt-2 app-card-soft px-3 py-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Impacto esperado</p>
-                <p className="mt-1 text-xs leading-5 text-slate-600">{assistantSummary.actionImpact}</p>
-              </div>
-            </div>
-
-            <div className="app-card px-4 py-4">
-              <p className="text-sm font-semibold text-slate-900">Limite de hoje</p>
-              <p className="mt-1 text-sm font-medium text-slate-700">{assistantSummary.dailyLimit}</p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">{assistantSummary.dailyLimitSupport}</p>
-            </div>
-          </div>
-
-          <div className="mt-3 app-card px-4 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-slate-900">Depois da prioridade 1</p>
-              <span className="text-xs text-slate-500">Só o que merece atenção depois</span>
-            </div>
-
-            {supportingCategoriesOutOfPace.length > 0 ? (
-              <div className="mt-3 space-y-2">
-                {supportingCategoriesOutOfPace.map((item) => (
-                  <div
-                    key={item.category}
-                    className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">{item.shortLabel}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.shortStatus}</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">{item.actionHint}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold text-slate-900">
-                        {formatCurrency(item.paceDifference)}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {item.paceStatus === "off_track" ? "acima do ritmo" : "na zona de atenção"}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-3 text-sm text-slate-600">Depois da prioridade principal, não existe outra frente crítica chamando mais atenção neste momento.</p>
-            )}
-          </div>
-
-          {assistantSummary.secondaryAlert ? (
-            <div className="mt-3 app-card-soft px-4 py-4">
-              <p className="text-sm font-semibold text-slate-900">Contexto rápido</p>
-              <p className="mt-1 text-sm text-slate-600">{assistantSummary.secondaryAlert}</p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
-                Esse ponto foi priorizado porque tem mais impacto imediato no seu mês.
-              </p>
-            </div>
-          ) : null}
-
-          <div className="mt-4">
-            <Link
-              href="/intelligence"
-              className="app-button-primary flex w-full items-center justify-between"
-            >
-              <span>Ver análise completa</span>
-              <span>→</span>
-            </Link>
-          </div>
-        </section>
-
-        {plannedMonthTransactions.length > 0 ? (
-          <section id="planned-confirmations" className="app-card border-2 border-indigo-200 bg-indigo-50/40">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium text-indigo-700">Próximas confirmações</p>
-                <h2 className="mt-1 text-lg font-bold text-slate-900">
-                  Transações previstas para confirmar
-                </h2>
-                <p className="mt-2 text-sm text-slate-600">
-                  Quando a transação acontecer de verdade, use o botão <span className="font-semibold text-indigo-700">Confirmar</span> abaixo para ela passar a impactar seu saldo real.
-                </p>
-              </div>
-              <span className="app-badge-neutral">
-                {plannedMonthTransactions.length} pendente{plannedMonthTransactions.length > 1 ? "s" : ""}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {plannedMonthTransactions
-                .slice()
-                .sort(
-                  (a, b) =>
-                    new Date(getTransactionEffectiveDate(a)).getTime() -
-                    new Date(getTransactionEffectiveDate(b)).getTime()
-                )
-                .slice(0, 5)
-                .map((transaction) => (
-                  <div
-                    key={transaction.id}
-                    className="app-card-soft flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">
-                        {transaction.title}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Prevista para{" "}
-                        {new Date(getTransactionEffectiveDate(transaction)).toLocaleDateString("pt-BR")}{" "}
-                        • {isIncomeType(transaction.type) ? "Entrada" : "Saída"}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-slate-700">
-                        {formatCurrency(getTransactionEffectiveAmount(transaction))}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleConfirmTransaction(transaction)}
-                      className="app-button-primary sm:w-auto"
-                    >
-                      Confirmar agora
-                    </button>
-                  </div>
-                ))}
-            </div>
-
-            {plannedMonthTransactions.length > 5 ? (
-              <p className="mt-3 text-xs text-slate-500">
-                Mostrando as 5 primeiras transações previstas deste mês.
-              </p>
-            ) : null}
-          </section>
         ) : null}
 
-        {plannedVsActualSummary.comparableTransactions.length > 0 ? (
-          <section className="app-card border border-emerald-200 bg-emerald-50/40">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">
-                  Previsto vs realizado
-                </p>
-                <h2 className="mt-1 text-lg font-bold text-slate-900">
-                  Como o mês saiu na prática
-                </h2>
-                <p className="mt-2 text-sm text-slate-600">
-                  Aqui você vê a diferença entre o que planejou e o que realmente aconteceu nas transações já confirmadas.
-                </p>
-              </div>
-              <span className="app-badge-neutral">
-                {plannedVsActualSummary.comparableTransactions.length} comparada{plannedVsActualSummary.comparableTransactions.length > 1 ? "s" : ""}
-              </span>
-            </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Entradas vs previsto
-                </p>
-                <p className={`mt-2 text-xl font-bold md:text-2xl ${plannedVsActualSummary.incomeDiffTotal >= 0 ? "app-value-positive" : "app-value-negative"}`}>
-                  {plannedVsActualSummary.incomeDiffTotal >= 0 ? "+" : ""}
-                  {formatCurrency(plannedVsActualSummary.incomeDiffTotal)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Positivo = entrou mais do que o planejado.
-                </p>
-              </div>
+        {dashboardTab === "divida" ? (
+          <section className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.1fr_0.9fr]">
+              <article className="app-card overflow-hidden border border-slate-200 bg-white">
+                <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-5 text-white">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">Missão principal</p>
+                  <h2 className="mt-2 text-2xl font-black leading-tight">Quitar a menor dívida primeiro</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">O app precisa te ajudar a guardar antes de gastar. Esta aba mostra só o que importa para sair da dívida.</p>
 
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Saídas vs previsto
-                </p>
-                <p className={`mt-2 text-xl font-bold md:text-2xl ${plannedVsActualSummary.expenseDiffTotal <= 0 ? "app-value-positive" : "app-value-negative"}`}>
-                  {plannedVsActualSummary.expenseDiffTotal > 0 ? "+" : ""}
-                  {formatCurrency(plannedVsActualSummary.expenseDiffTotal)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Positivo = você gastou mais do que previa.
-                </p>
-              </div>
-
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Impacto no saldo
-                </p>
-                <p className={`mt-2 text-xl font-bold md:text-2xl ${plannedVsActualSummary.netImpact >= 0 ? "app-value-positive" : "app-value-negative"}`}>
-                  {plannedVsActualSummary.netImpact >= 0 ? "+" : ""}
-                  {formatCurrency(plannedVsActualSummary.netImpact)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Resultado líquido entre entradas e saídas.
-                </p>
-              </div>
-
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Cumprimento de datas
-                </p>
-                <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">
-                  {plannedVsActualSummary.onTimeCount}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  No prazo · {plannedVsActualSummary.delayedCount} atrasada{plannedVsActualSummary.delayedCount !== 1 ? "s" : ""} · {plannedVsActualSummary.advancedCount} adiantada{plannedVsActualSummary.advancedCount !== 1 ? "s" : ""}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-white/80 p-4">
-              <p className="text-sm font-semibold text-slate-900">
-                {plannedVsActualSummary.netImpact > 0
-                  ? `Seu saldo real ficou ${formatCurrency(plannedVsActualSummary.netImpact)} melhor do que o planejado.`
-                  : plannedVsActualSummary.netImpact < 0
-                  ? `Seu saldo real ficou ${formatCurrency(Math.abs(plannedVsActualSummary.netImpact))} abaixo do planejado.`
-                  : "Seu realizado ficou muito próximo do que você tinha planejado."}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Entradas abaixo do previsto reduzem sua folga. Saídas acima do previsto também apertam o saldo.
-              </p>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {plannedVsActualSummary.biggestDeviations.map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="app-card-soft flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${transaction.isIncome ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-                        {transaction.isIncome ? "Entrada" : "Saída"}
-                      </span>
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl bg-white/8 p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Dívida alvo</p>
+                      <p className="mt-2 text-xl font-bold text-white">{formatCurrency(currentDebtTarget)}</p>
                     </div>
-
-                    <p className="mt-1 text-xs text-slate-500">
-                      Previsto {formatCurrency(transaction.expectedAmountValue)} em{" "}
-                      {new Date(transaction.expectedDateValue).toLocaleDateString("pt-BR")}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Realizado {formatCurrency(transaction.actualAmountValue)} em{" "}
-                      {new Date(transaction.actualDateValue).toLocaleDateString("pt-BR")}
-                    </p>
+                    <div className="rounded-2xl bg-white/8 p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Faltam</p>
+                      <p className="mt-2 text-xl font-bold text-amber-200">{formatCurrency(debtRemaining)}</p>
+                    </div>
                   </div>
 
-                  <div className="text-left md:text-right">
-                    <p className={`text-sm font-bold ${transaction.isIncome ? (transaction.amountDiff >= 0 ? "app-value-positive" : "app-value-negative") : (transaction.amountDiff <= 0 ? "app-value-positive" : "app-value-negative")}`}>
-                      {transaction.amountDiff > 0 ? "+" : ""}
-                      {formatCurrency(transaction.amountDiff)}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {transaction.dateDiffDays === 0
-                        ? "No prazo"
-                        : transaction.dateDiffDays > 0
-                        ? `${transaction.dateDiffDays} dia${transaction.dateDiffDays > 1 ? "s" : ""} depois`
-                        : `${Math.abs(transaction.dateDiffDays)} dia${Math.abs(transaction.dateDiffDays) > 1 ? "s" : ""} antes`}
-                    </p>
+                  <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full rounded-full bg-amber-300 transition-all" style={{ width: `${debtProgress}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-300">Progresso da missão: {debtProgress.toFixed(0)}%</p>
+                </div>
+              </article>
+
+              <article className="app-card border border-emerald-200 bg-emerald-50">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Cofrinho PicPay</p>
+                <h2 className="mt-2 text-2xl font-black text-slate-900">{formatCurrency(cofrinho)}</h2>
+                <p className="mt-2 text-sm leading-6 text-emerald-800">Dinheiro separado mentalmente. Mesmo estando na mesma conta, ele não deve entrar no seu disponível do dia.</p>
+
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-white/80 p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta mensal</p>
+                    <p className="mt-2 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white/80 p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Guardado no mês</p>
+                    <p className="mt-2 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
                   </div>
                 </div>
-              ))}
+
+                <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => handlePocketSave(pocketSuggestion)}
+                    className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800"
+                  >
+                    Guardar sugestão
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenTransactionLauncher}
+                    className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Ações rápidas
+                  </button>
+                </div>
+              </article>
             </div>
+
+            <section className="app-card border border-slate-200 bg-white">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ritmo mínimo</p>
+                  <p className="mt-2 text-xl font-bold text-slate-900">{formatCurrency(Math.max(monthlyPocketGoal / 30, 1))}/dia</p>
+                  <p className="mt-1 text-sm text-slate-500">Referência diária para bater a meta mensal.</p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Falta da meta mensal</p>
+                  <p className="mt-2 text-xl font-bold text-slate-900">{formatCurrency(Math.max(monthlyPocketGoal - monthlyPocketSaved, 0))}</p>
+                  <p className="mt-1 text-sm text-slate-500">Prioridade antes de qualquer gasto extra.</p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Regra do dia</p>
+                  <p className="mt-2 text-sm font-bold text-slate-900">Se não for necessário, não lança.</p>
+                  <p className="mt-1 text-sm text-slate-500">O freio existe para proteger a quitação.</p>
+                </div>
+              </div>
+            </section>
           </section>
         ) : null}
 
+        {dashboardTab === "cartoes" ? (
+          <section className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Faturas abertas</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(openInvoicesTotal)}</p>
+                <p className="mt-2 text-sm text-slate-500">Total em aberto nos cartões neste momento.</p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Compras do mês</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(selectedMonthCreditPurchasesTotal)}</p>
+                <p className="mt-2 text-sm text-slate-500">Valor lançado no cartão dentro do mês filtrado.</p>
+              </div>
+
+              <div className="app-card-soft p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Saldo anterior</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(cardPreviousBalanceTotal)}</p>
+                <p className="mt-2 text-sm text-slate-500">Parte das faturas que já vinha de meses anteriores.</p>
+              </div>
+            </div>
+
+            <section className="app-card">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Visão rápida</p>
+                  <h2 className="mt-1 text-lg font-bold text-slate-900">Faturas em destaque</h2>
+                </div>
+                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                  Abrir faturas
+                </Link>
+              </div>
+
+              {openInvoices.length === 0 ? (
+                <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
+                  Você não tem faturas abertas agora.
+                </div>
+              ) : (
+                <div className="mt-4 flex snap-x gap-3 overflow-x-auto pb-1">
+                  {openInvoices.map((invoice) => (
+                    <article key={invoice.id} className="min-w-[280px] snap-start rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{invoice.card?.name || "Cartão"}</p>
+                          <p className="mt-1 text-xs text-slate-500">{formatInvoiceLabel(invoice.month, invoice.year)}</p>
+                        </div>
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${invoice.status === "OPEN" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                          {invoice.status === "OPEN" ? "Aberta" : "Paga"}
+                        </span>
+                      </div>
+
+                      <p className="mt-5 text-2xl font-bold text-slate-900">{formatCurrency(invoice.total)}</p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {invoice.dueDate ? `Vence em ${new Date(invoice.dueDate).toLocaleDateString("pt-BR")}` : "Sem vencimento informado"}
+                      </p>
+
+                      <div className="mt-5 flex gap-2">
+                        <Link href="/invoices" className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800">
+                          Pagar
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={handleGoToInitialBalanceSection}
+                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Ajustar
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="app-card">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Parcelas futuras</p>
+                  <h2 className="mt-1 text-lg font-bold text-slate-900">O que ainda vem pela frente</h2>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  {futureInstallmentsByMonth.length} mês(es)
+                </span>
+              </div>
+
+              {futureInstallmentsByMonth.length === 0 ? (
+                <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
+                  Não há parcelas futuras previstas no momento.
+                </div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {futureInstallmentsByMonth.map((group) => (
+                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{group.label}</p>
+                          <p className="mt-1 text-xs text-slate-500">{group.count} compra(s) parcelada(s)</p>
+                        </div>
+                        <div className="text-left sm:text-right">
+                          <p className="text-sm font-bold text-slate-900">{formatCurrency(group.total)}</p>
+                          <p className={`mt-1 text-xs ${group.projectedBalance >= 0 ? "text-slate-500" : "text-rose-600"}`}>
+                            Saldo após esse mês: {formatCurrency(group.projectedBalance)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </section>
+        ) : null}
 
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-2">
           <Link
-            href="/transactions"
-            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
-          >
-            <p className="text-sm font-semibold text-slate-900">Lançar transação</p>
-            <p className="mt-1 text-xs text-slate-500">Registrar entradas e saídas.</p>
-          </Link>
-
-          <Link
             href="/invoices"
-            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
+            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
           >
             <p className="text-sm font-semibold text-slate-900">Cartão de crédito</p>
             <p className="mt-1 text-xs text-slate-500">Ver faturas e limite.</p>
@@ -5593,7 +6219,7 @@ const dataHealthSummary = useMemo(() => {
 
           <Link
             href="/goals"
-            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
+            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
           >
             <p className="text-sm font-semibold text-slate-900">Metas e categorias</p>
             <p className="mt-1 text-xs text-slate-500">Acompanhar metas do mês.</p>
@@ -5601,31 +6227,32 @@ const dataHealthSummary = useMemo(() => {
 
           <Link
             href="/intelligence"
-            className="app-card text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md p-4"
+            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
           >
             <p className="text-sm font-semibold text-slate-900">Inteligência financeira</p>
             <p className="mt-1 text-xs text-slate-500">Ver alertas e recomendações.</p>
           </Link>
-        </section>
 
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
           <Link
             href="/accounts"
-            className="app-button-secondary text-center"
+            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
           >
-            Contas e cartões
+            <p className="text-sm font-semibold text-slate-900">Contas + Cartões</p>
+            <p className="mt-1 text-xs text-slate-500">Gerenciar contas, cartões e saldos.</p>
           </Link>
+        </section>
 
+        <section className="flex flex-wrap items-center justify-start gap-3">
           <button
             type="button"
             onClick={handleResetAllData}
             disabled={resettingData}
-            className="app-button-danger disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-2xl border border-rose-200 bg-white px-5 py-3 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {resettingData ? "Resetando..." : "Resetar dados"}
           </button>
 
-          <div className="app-button-secondary text-center">
+          <div className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
             <LogoutButton />
           </div>
         </section>
