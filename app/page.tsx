@@ -178,6 +178,16 @@ type ActionCenterAlert = {
 
 type DashboardTab = "agora" | "projecao" | "cartoes" | "divida";
 
+type Debt = {
+  id: string;
+  name: string;
+  total: number;
+  target: number;
+  status: "open" | "paid";
+  createdAt: string;
+  paidAt?: string | null;
+};
+
 const COLORS = [
   "#6366f1",
   "#8b5cf6",
@@ -714,9 +724,14 @@ export default function DashboardPage() {
   const [initialBalanceSubmitting, setInitialBalanceSubmitting] = useState(false);
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>("agora");
   const [quickActionModalOpen, setQuickActionModalOpen] = useState(false);
+  const [supportMenuOpen, setSupportMenuOpen] = useState(false);
+  const [accelerationPanelOpen, setAccelerationPanelOpen] = useState(false);
   const [cofrinho, setCofrinho] = useState(0);
   const [monthlyPocketGoal, setMonthlyPocketGoal] = useState(300);
   const [currentDebtTarget, setCurrentDebtTarget] = useState(2063);
+  const [debts, setDebts] = useState<Debt[]>([]);
+  const [debtNameInput, setDebtNameInput] = useState("");
+  const [debtTargetInput, setDebtTargetInput] = useState("");
   const [impactExpenseInput, setImpactExpenseInput] = useState("");
   const [monthlyPocketSaved, setMonthlyPocketSaved] = useState(0);
   const [pocketSuggestionModalOpen, setPocketSuggestionModalOpen] = useState(false);
@@ -732,6 +747,8 @@ export default function DashboardPage() {
     snapshot: null,
     source: "quick_new",
   });
+  const [debtPayoffModalOpen, setDebtPayoffModalOpen] = useState(false);
+  const [lastPayoffPromptDebtId, setLastPayoffPromptDebtId] = useState("");
 
   function showToast(
     title: string,
@@ -802,6 +819,47 @@ export default function DashboardPage() {
     );
   }
 
+
+  function handlePocketWithdraw() {
+    if (cofrinho <= 0) {
+      showToast(
+        "Cofrinho vazio",
+        "Não há valor guardado para retirar agora.",
+        "info"
+      );
+      return;
+    }
+
+    const amountInput = window.prompt(
+      "Quanto você quer tirar do cofrinho?",
+      formatCurrency(cofrinho)
+    );
+
+    if (amountInput === null) return;
+
+    const parsedAmount = parseCurrencyInput(amountInput);
+
+    if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      showToast(
+        "Valor inválido",
+        "Digite um valor válido para retirar do cofrinho.",
+        "error"
+      );
+      return;
+    }
+
+    const safeAmount = Math.min(Math.round(parsedAmount * 100) / 100, cofrinho);
+
+    setCofrinho((current) => Math.max(current - safeAmount, 0));
+    setMonthlyPocketSaved((current) => Math.max(current - safeAmount, 0));
+
+    showToast(
+      "Valor retirado do cofrinho",
+      `Você retirou ${formatCurrency(safeAmount)}. O valor que falta para quitar a dívida foi atualizado.`,
+      "info"
+    );
+  }
+
   function handlePocketModalDismiss() {
     setPocketSuggestionModalOpen(false);
 
@@ -858,10 +916,109 @@ export default function DashboardPage() {
     setQuickActionModalOpen(false);
   }
 
+  function openSupportMenu() {
+    setSupportMenuOpen(true);
+  }
+
+  function closeSupportMenu() {
+    setSupportMenuOpen(false);
+  }
+
+  function goToDashboardTab(tab: DashboardTab) {
+    setDashboardTab(tab);
+    closeSupportMenu();
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }, 50);
+  }
+
+  function goToSupportRoute(path: string) {
+    closeSupportMenu();
+    router.push(path);
+  }
+
   function goToTransactionsWithQuickMode(mode: "expense" | "income" | "future" = "expense") {
     closeQuickActionModal();
     const query = mode === "expense" ? "" : `?quickMode=${mode}`;
     router.push(`/transactions${query}`);
+  }
+
+  function handleAddDebt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const target = parseCurrencyInput(debtTargetInput);
+
+    if (!debtNameInput.trim()) {
+      showToast("Informe o nome", "Dê um nome para identificar essa dívida.", "error");
+      return;
+    }
+
+    if (!Number.isFinite(target) || target <= 0) {
+      showToast("Valor inválido", "Informe o valor para quitar essa dívida.", "error");
+      return;
+    }
+
+    setDebts((current) => [
+      ...current,
+      {
+        id: `debt-${Date.now()}`,
+        name: debtNameInput.trim(),
+        total: target,
+        target,
+        status: "open",
+        createdAt: new Date().toISOString(),
+        paidAt: null,
+      },
+    ]);
+
+    setDebtNameInput("");
+    setDebtTargetInput("");
+    showToast("Dívida cadastrada", "A menor dívida aberta vira automaticamente sua missão atual.", "success");
+  }
+
+  function markDebtAsPaid(id: string) {
+    setDebts((current) =>
+      current.map((debt) =>
+        debt.id === id
+          ? { ...debt, status: "paid", paidAt: new Date().toISOString() }
+          : debt
+      )
+    );
+
+    showToast("Dívida quitada", "O app já vai focar automaticamente na próxima menor dívida aberta.", "success");
+  }
+
+  function reopenDebt(id: string) {
+    setDebts((current) =>
+      current.map((debt) =>
+        debt.id === id ? { ...debt, status: "open", paidAt: null } : debt
+      )
+    );
+  }
+
+  function closeDebtPayoffModal() {
+    if (currentDebt?.id) {
+      setLastPayoffPromptDebtId(currentDebt.id);
+    }
+
+    setDebtPayoffModalOpen(false);
+  }
+
+  function confirmDebtPayoff() {
+    if (!currentDebt) return;
+
+    const amountUsedToPay = Math.min(cofrinho, activeDebtTarget);
+
+    markDebtAsPaid(currentDebt.id);
+    setCofrinho((current) => Math.max(current - amountUsedToPay, 0));
+    setDebtPayoffModalOpen(false);
+    setLastPayoffPromptDebtId("");
+  }
+
+  function removeDebt(id: string) {
+    const confirmed = window.confirm("Remover esta dívida da sua lista?");
+    if (!confirmed) return;
+    setDebts((current) => current.filter((debt) => debt.id !== id));
   }
 
   function handleOpenTransactionLauncher() {
@@ -1218,6 +1375,34 @@ export default function DashboardPage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("finance-app:current-debt-target", String(currentDebtTarget));
   }, [currentDebtTarget]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const saved = window.localStorage.getItem("finance-app:debts");
+
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setDebts(Array.isArray(parsed) ? parsed : []);
+        return;
+      } catch {
+        setDebts([]);
+      }
+    }
+
+    setDebts([
+      { id: "debt-btg-2063", name: "BTG Pactual", total: 2063.54, target: 2063.54, status: "open", createdAt: new Date().toISOString(), paidAt: null },
+      { id: "debt-nu-4553", name: "Nubank 1", total: 4553.37, target: 4553.37, status: "open", createdAt: new Date().toISOString(), paidAt: null },
+      { id: "debt-nu-5460", name: "Nubank 2", total: 5460.86, target: 5460.86, status: "open", createdAt: new Date().toISOString(), paidAt: null },
+      { id: "debt-nu-5589", name: "Nubank 3", total: 5589.97, target: 5589.97, status: "open", createdAt: new Date().toISOString(), paidAt: null },
+    ]);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("finance-app:debts", JSON.stringify(debts));
+  }, [debts]);
 
   useEffect(() => {
     const saved = localStorage.getItem(getGoalsStorageKey(selectedMonth));
@@ -5128,14 +5313,97 @@ const dataHealthSummary = useMemo(() => {
     return currentAccountsBalance - cofrinho;
   }, [cofrinho, currentAccountsBalance]);
 
+  const openDebts = useMemo(() => {
+    return debts
+      .filter((debt) => debt.status === "open")
+      .sort((a, b) => a.target - b.target);
+  }, [debts]);
+
+  const paidDebts = useMemo(() => {
+    return debts
+      .filter((debt) => debt.status === "paid")
+      .sort((a, b) => a.target - b.target);
+  }, [debts]);
+
+  const currentDebt = useMemo(() => {
+    return openDebts[0] || null;
+  }, [openDebts]);
+
+  const activeDebtTarget = currentDebt?.target || currentDebtTarget;
+  const activeDebtName = currentDebt?.name || "Dívida atual";
+
   const debtRemaining = useMemo(() => {
-    return Math.max(currentDebtTarget - cofrinho, 0);
-  }, [cofrinho, currentDebtTarget]);
+    return Math.max(activeDebtTarget - cofrinho, 0);
+  }, [activeDebtTarget, cofrinho]);
 
   const debtProgress = useMemo(() => {
-    if (currentDebtTarget <= 0) return 0;
-    return Math.min((cofrinho / currentDebtTarget) * 100, 100);
-  }, [cofrinho, currentDebtTarget]);
+    if (activeDebtTarget <= 0) return 0;
+    return Math.min((cofrinho / activeDebtTarget) * 100, 100);
+  }, [activeDebtTarget, cofrinho]);
+
+  const debtForecast = useMemo(() => {
+    const safeMonthlyGoal = Math.max(monthlyPocketGoal, 1);
+    const dailyPace = Math.max(safeMonthlyGoal / 30, 1);
+    const remaining = Math.max(debtRemaining, 0);
+    const daysToPay = remaining <= 0 ? 0 : Math.ceil(remaining / dailyPace);
+    const monthsToPay = remaining <= 0 ? 0 : Math.ceil(remaining / safeMonthlyGoal);
+    const daysAfterExtraFifty = remaining <= 0 ? 0 : Math.ceil(Math.max(remaining - 50, 0) / dailyPace);
+    const daysGainedWithFifty = Math.max(daysToPay - daysAfterExtraFifty, 0);
+
+    return {
+      dailyPace,
+      daysToPay,
+      monthsToPay,
+      daysGainedWithFifty,
+      isCompleted: remaining <= 0,
+    };
+  }, [debtRemaining, monthlyPocketGoal]);
+
+  const accelerationScenarios = useMemo(() => {
+    const remaining = Math.max(debtRemaining, 0);
+    const baseMonthlyGoal = Math.max(monthlyPocketGoal, 1);
+
+    const scenarios = [
+      {
+        id: "base",
+        label: "Plano atual",
+        description: "Mantendo sua meta atual.",
+        extraMonthly: 0,
+        highlight: false,
+      },
+      {
+        id: "light",
+        label: "Acelerar leve",
+        description: "Um aperto possível sem pesar tanto.",
+        extraMonthly: 50,
+        highlight: true,
+      },
+      {
+        id: "strong",
+        label: "Acelerar forte",
+        description: "Para meses em que sobrar mais fôlego.",
+        extraMonthly: 100,
+        highlight: false,
+      },
+    ];
+
+    return scenarios.map((scenario) => {
+      const monthlyTotal = baseMonthlyGoal + scenario.extraMonthly;
+      const dailyPace = Math.max(monthlyTotal / 30, 1);
+      const daysToPay = remaining <= 0 ? 0 : Math.ceil(remaining / dailyPace);
+      const monthsToPay = remaining <= 0 ? 0 : Math.ceil(remaining / monthlyTotal);
+      const daysGained = Math.max(debtForecast.daysToPay - daysToPay, 0);
+
+      return {
+        ...scenario,
+        monthlyTotal,
+        dailyPace,
+        daysToPay,
+        monthsToPay,
+        daysGained,
+      };
+    });
+  }, [debtForecast.daysToPay, debtRemaining, monthlyPocketGoal]);
 
   const pocketSuggestion = useMemo(() => {
     const remainingGoal = Math.max(monthlyPocketGoal - cofrinho, 0);
@@ -5216,6 +5484,17 @@ const dataHealthSummary = useMemo(() => {
 
     setPocketSuggestionModalOpen(true);
   }, [lastPocketHandledIncomeId, latestIncomeForPocketModal, monthlyPocketGoal, monthlyPocketSaved]);
+
+  useEffect(() => {
+    if (!currentDebt || !debtForecast.isCompleted) {
+      setDebtPayoffModalOpen(false);
+      return;
+    }
+
+    if (lastPayoffPromptDebtId === currentDebt.id) return;
+
+    setDebtPayoffModalOpen(true);
+  }, [currentDebt, debtForecast.isCompleted, lastPayoffPromptDebtId]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 p-2 sm:p-3 md:p-8">
@@ -5331,6 +5610,81 @@ const dataHealthSummary = useMemo(() => {
         </div>
       ) : null}
 
+      {supportMenuOpen ? (
+        <div className="fixed inset-0 z-[43] flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
+          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Menu rápido</p>
+                  <h3 className="mt-2 text-xl font-bold">O que você quer acessar?</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    Use este menu para entrar nas áreas de apoio sem poluir a Home.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeSupportMenu}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3 px-5 py-5">
+              <button
+                type="button"
+                onClick={() => goToDashboardTab("divida")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-amber-200 bg-amber-50 px-4 py-4 text-left transition hover:bg-amber-100/70"
+              >
+                <div>
+                  <p className="text-base font-bold text-amber-950">Dívidas</p>
+                  <p className="mt-1 text-sm text-amber-700">Ver missão, cofrinho, previsão e próximos passos.</p>
+                </div>
+                <span className="text-xl text-amber-600">›</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => goToSupportRoute("/accounts")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div>
+                  <p className="text-base font-bold text-slate-900">Contas + Cartões</p>
+                  <p className="mt-1 text-sm text-slate-500">Gerenciar contas, cartões e saldos.</p>
+                </div>
+                <span className="text-xl text-slate-400">›</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => goToSupportRoute("/goals")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div>
+                  <p className="text-base font-bold text-slate-900">Metas e categorias</p>
+                  <p className="mt-1 text-sm text-slate-500">Acompanhar metas do mês.</p>
+                </div>
+                <span className="text-xl text-slate-400">›</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => goToSupportRoute("/intelligence")}
+                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div>
+                  <p className="text-base font-bold text-slate-900">Inteligência financeira</p>
+                  <p className="mt-1 text-sm text-slate-500">Ver alertas e recomendações.</p>
+                </div>
+                <span className="text-xl text-slate-400">›</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {pocketSuggestionModalOpen && latestIncomeForPocketModal && pocketModalSuggestion > 0 ? (
         <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
           <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
@@ -5355,11 +5709,11 @@ const dataHealthSummary = useMemo(() => {
 
             <div className="space-y-4 px-5 py-5">
               <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl bg-slate-50 p-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta do mês</p>
                   <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
                 </div>
-                <div className="rounded-2xl bg-slate-50 p-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Já guardado</p>
                   <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
                 </div>
@@ -5395,6 +5749,72 @@ const dataHealthSummary = useMemo(() => {
         </div>
       ) : null}
 
+      {debtPayoffModalOpen && currentDebt ? (
+        <div className="fixed inset-0 z-[44] flex items-end justify-center bg-slate-950/50 p-3 sm:items-center">
+          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-emerald-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 px-5 py-4 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-200">Momento de quitação</p>
+                  <h3 className="mt-2 text-xl font-bold">Você já pode quitar essa dívida</h3>
+                  <p className="mt-2 text-sm text-slate-300">
+                    Seu cofrinho chegou no valor necessário para negociar e encerrar esta missão.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeDebtPayoffModal}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
+                >
+                  Depois
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dívida</p>
+                  <p className="mt-1 text-sm font-bold text-slate-900">{currentDebt.name}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta</p>
+                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(activeDebtTarget)}</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Cofrinho</p>
+                  <p className="mt-1 text-base font-bold text-emerald-700">{formatCurrency(cofrinho)}</p>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-sm font-semibold text-emerald-900">Essa é a hora de agir.</p>
+                <p className="mt-1 text-sm text-emerald-800">
+                  Ao marcar como quitada, o app encerra esta missão, usa o valor da dívida do cofrinho e muda automaticamente para a próxima menor dívida aberta.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={confirmDebtPayoff}
+                  className="inline-flex flex-1 items-center justify-center rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                >
+                  Marcar como quitada
+                </button>
+                <button
+                  type="button"
+                  onClick={closeDebtPayoffModal}
+                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Depois
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {expenseBlockModal.open && expenseBlockModal.snapshot ? (
         <div className="fixed inset-0 z-[45] flex items-end justify-center bg-slate-950/50 p-3 sm:items-center">
           <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-rose-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
@@ -5417,11 +5837,11 @@ const dataHealthSummary = useMemo(() => {
 
             <div className="space-y-4 px-5 py-5">
               <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl bg-slate-50 p-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Valor</p>
                   <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(expenseBlockModal.amount)}</p>
                 </div>
-                <div className="rounded-2xl bg-slate-50 p-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Sobra hoje</p>
                   <p className={`mt-1 text-base font-bold ${expenseBlockModal.snapshot.remainingAfterExpense >= 0 ? "text-slate-900" : "text-rose-600"}`}>
                     {formatCurrency(expenseBlockModal.snapshot.nextAvailableToday)}
@@ -5434,7 +5854,7 @@ const dataHealthSummary = useMemo(() => {
               </div>
 
               <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-3">
-                <p className="text-sm font-semibold text-rose-900">Esse gasto vai consumir seu limite do dia.</p>
+                <p className="text-sm font-semibold text-rose-900">Você vai zerar seu limite de hoje.</p>
                 <ul className="mt-2 space-y-1 text-sm text-rose-800">
                   <li>• Depois dele, sobram {formatCurrency(expenseBlockModal.snapshot.nextAvailableToday)} hoje.</li>
                   <li>• Sua missão perde cerca de {expenseBlockModal.snapshot.daysLost} dia(s).</li>
@@ -5496,18 +5916,18 @@ const dataHealthSummary = useMemo(() => {
         </div>
       ) : null}
 
-      <div className="mx-auto max-w-3xl space-y-4 md:space-y-6">
+      <div className="mx-auto max-w-3xl space-y-4 md:space-y-5">
         <header className="space-y-4">
-          <section className="app-card overflow-hidden border border-slate-200 bg-white">
+          <section className="app-card overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50/70 to-white shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
             <div className="flex flex-col gap-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="max-w-2xl">
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Modo anti-dívida</p>
                   <h1 className="mt-2 text-2xl font-bold leading-tight text-slate-900 md:text-3xl">
-                    Seu painel de decisão do dia
+                    Painel de decisão do dia
                   </h1>
                   <p className="mt-2 text-sm leading-6 text-slate-500">
-                    Abra o app, veja quanto pode gastar, registre o necessário e proteja o cofrinho sem precisar rolar a tela inteira.
+                    Veja o limite do dia, proteja o cofrinho e avance na quitação sem esforço.
                   </p>
                 </div>
 
@@ -5525,7 +5945,7 @@ const dataHealthSummary = useMemo(() => {
               </div>
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.25fr_0.95fr]">
-                <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-5 text-white shadow-[0_22px_60px_rgba(15,23,42,0.18)]">
+                <div className="rounded-[32px] border border-slate-900 bg-slate-950 p-5 text-white shadow-[0_28px_70px_rgba(15,23,42,0.26)]">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Disponível hoje</p>
@@ -5533,50 +5953,50 @@ const dataHealthSummary = useMemo(() => {
                         {formatCurrency(spendingCapacitySummary.safeDailySpend)}
                       </p>
                       <p className="mt-2 text-sm text-slate-300">
-                        Esse é o número principal. Se passar disso hoje, você atrasa sua meta.
+                        Se passar disso hoje, você atrasa sua meta.
                       </p>
                     </div>
 
                     <button
                       type="button"
                       onClick={handleOpenTransactionLauncher}
-                      className="inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/20"
+                      className="inline-flex h-12 min-w-12 items-center justify-center rounded-full bg-white/12 px-4 text-sm font-bold text-white shadow-inner transition hover:bg-white/20"
                     >
                       + Novo
                     </button>
                   </div>
 
                   <div className="mt-5 grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-white/6 p-4">
+                    <div className="rounded-2xl border border-white/10 bg-white/7 p-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Disponível real</p>
                       <p className={`mt-2 text-xl font-bold ${availableBalanceExcludingPocket >= 0 ? "text-sky-300" : "text-rose-300"}`}>
                         {formatCurrency(availableBalanceExcludingPocket)}
                       </p>
                     </div>
 
-                    <div className="rounded-2xl bg-white/6 p-4">
+                    <div className="rounded-2xl border border-white/10 bg-white/7 p-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Faturas abertas</p>
                       <p className="mt-2 text-xl font-bold text-white">{formatCurrency(openInvoicesTotal)}</p>
                     </div>
                   </div>
                 </div>
 
-                <div className="rounded-[28px] border border-amber-200 bg-amber-50 p-5">
+                <div className="rounded-[32px] border border-amber-200 bg-gradient-to-br from-white via-amber-50/70 to-white p-5 shadow-[0_20px_60px_rgba(245,158,11,0.10)]">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Missão atual</p>
-                      <h2 className="mt-2 text-xl font-bold text-slate-900">Quitar a menor dívida primeiro</h2>
+                      <h2 className="mt-2 text-xl font-bold text-slate-900">{currentDebt ? `Quitar ${activeDebtName}` : "Cadastre sua primeira dívida"}</h2>
                     </div>
                     <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm">
                       Dívida primeiro
                     </span>
                   </div>
 
-                  <div className="mt-4 rounded-2xl border border-white/80 bg-white/80 p-4">
+                  <div className="mt-4 rounded-[24px] border border-white bg-white/90 p-4 shadow-sm">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Meta alvo</p>
-                        <p className="mt-1 text-2xl font-bold text-slate-900">{formatCurrency(currentDebtTarget)}</p>
+                        <p className="mt-1 text-2xl font-bold text-slate-900">{formatCurrency(activeDebtTarget)}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faltam</p>
@@ -5584,22 +6004,35 @@ const dataHealthSummary = useMemo(() => {
                       </div>
                     </div>
 
-                    <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-200">
-                      <div className="h-full rounded-full bg-slate-900 transition-all" style={{ width: `${debtProgress}%` }} />
+                    <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-slate-950 transition-all" style={{ width: `${debtProgress}%` }} />
+                    </div>
+                    <p className="mt-2 text-right text-[11px] font-semibold text-slate-500">{debtProgress.toFixed(0)}% protegido</p>
+
+                    <div className="mt-4 rounded-2xl border border-amber-200 bg-white p-3 shadow-sm">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Previsão de quitação</p>
+                      {debtForecast.isCompleted ? (
+                        <p className="mt-1 text-sm font-bold text-emerald-700">Você já tem valor suficiente para negociar essa dívida.</p>
+                      ) : (
+                        <>
+                          <p className="mt-1 text-sm font-bold text-slate-900">Nesse ritmo: {debtForecast.monthsToPay} mês(es) ou {debtForecast.daysToPay} dia(s).</p>
+                          <p className="mt-1 text-xs text-amber-800">Se guardar +R$ 50 hoje, antecipa cerca de {debtForecast.daysGainedWithFifty} dia(s).</p>
+                        </>
+                      )}
                     </div>
 
                     <div className="mt-4 grid grid-cols-2 gap-3">
-                      <div className="rounded-2xl bg-slate-50 p-3">
+                      <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cofrinho</p>
                         <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(cofrinho)}</p>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 p-3">
+                      <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta do mês</p>
                         <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
                       </div>
                     </div>
 
-                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white/70 px-3 py-2">
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Guardado no mês</p>
                       <p className="mt-1 text-sm font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
                     </div>
@@ -5608,17 +6041,26 @@ const dataHealthSummary = useMemo(() => {
                       <button
                         type="button"
                         onClick={() => handlePocketSave(pocketSuggestion)}
-                        className="inline-flex items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                        className="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
                       >
                         Guardar sugestão ({formatCurrency(pocketSuggestion)})
                       </button>
                       <button
                         type="button"
-                        onClick={() => { setCofrinho((current) => Math.max(current - pocketSuggestion, 0)); setMonthlyPocketSaved((current) => Math.max(current - pocketSuggestion, 0)); }}
-                        className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        onClick={handlePocketWithdraw}
+                        className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                       >
                         Tirar do cofrinho
                       </button>
+                      {currentDebt ? (
+                        <button
+                          type="button"
+                          onClick={() => markDebtAsPaid(currentDebt.id)}
+                          className="inline-flex items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100"
+                        >
+                          Marcar quitada
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -5626,7 +6068,7 @@ const dataHealthSummary = useMemo(() => {
             </div>
           </section>
 
-          <section className="app-card sticky top-2 z-20 border border-slate-200 bg-white/95 backdrop-blur">
+          <section className="app-card sticky top-2 z-20 border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div className="inline-flex w-full rounded-full bg-slate-100 p-1 md:w-auto">
                 {([
@@ -5650,10 +6092,10 @@ const dataHealthSummary = useMemo(() => {
               </div>
 
               <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                   Pagar faturas
                 </Link>
-                <Link href="/intelligence" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                <Link href="/intelligence" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                   Inteligência
                 </Link>
               </div>
@@ -5663,7 +6105,7 @@ const dataHealthSummary = useMemo(() => {
 
           {dashboardTab === "agora" ? (
             <section className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_0.9fr]">
-              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
@@ -5684,7 +6126,7 @@ const dataHealthSummary = useMemo(() => {
                   </span>
                 </div>
 
-                <div className="mt-4 rounded-[24px] bg-slate-950 p-5 text-white">
+                <div className="mt-4 rounded-[26px] bg-slate-950 p-5 text-white shadow-[0_18px_45px_rgba(15,23,42,0.18)]">
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
                     Pode gastar hoje
                   </p>
@@ -5706,7 +6148,7 @@ const dataHealthSummary = useMemo(() => {
                   </button>
                 </div>
 
-                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
                   <p className="text-sm font-semibold text-amber-900">
                     {pocketSuggestion > 0
                       ? `Próximo passo: guardar ${formatCurrency(pocketSuggestion)} no cofrinho.`
@@ -5718,7 +6160,7 @@ const dataHealthSummary = useMemo(() => {
                 </div>
               </div>
 
-              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
@@ -5747,7 +6189,7 @@ const dataHealthSummary = useMemo(() => {
                       return (
                         <div
                           key={transaction.id}
-                          className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3"
+                          className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 transition hover:bg-white"
                         >
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-slate-900">
@@ -5768,7 +6210,7 @@ const dataHealthSummary = useMemo(() => {
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       Dívida falta
                     </p>
@@ -5776,7 +6218,7 @@ const dataHealthSummary = useMemo(() => {
                       {formatCurrency(debtRemaining)}
                     </p>
                   </div>
-                  <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       Cofrinho
                     </p>
@@ -6014,16 +6456,16 @@ const dataHealthSummary = useMemo(() => {
         {dashboardTab === "divida" ? (
           <section className="space-y-4">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.1fr_0.9fr]">
-              <article className="app-card overflow-hidden border border-slate-200 bg-white">
+              <article className="app-card overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50/70 to-white shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
                 <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-5 text-white">
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">Missão principal</p>
-                  <h2 className="mt-2 text-2xl font-black leading-tight">Quitar a menor dívida primeiro</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">O app precisa te ajudar a guardar antes de gastar. Esta aba mostra só o que importa para sair da dívida.</p>
+                  <h2 className="mt-2 text-2xl font-black leading-tight">{currentDebt ? `Quitar ${activeDebtName}` : "Cadastre sua primeira dívida"}</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">O app escolhe automaticamente a menor dívida aberta e mantém o foco nela até você marcar como quitada.</p>
 
                   <div className="mt-5 grid grid-cols-2 gap-3">
                     <div className="rounded-2xl bg-white/8 p-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Dívida alvo</p>
-                      <p className="mt-2 text-xl font-bold text-white">{formatCurrency(currentDebtTarget)}</p>
+                      <p className="mt-2 text-xl font-bold text-white">{formatCurrency(activeDebtTarget)}</p>
                     </div>
                     <div className="rounded-2xl bg-white/8 p-4">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Faltam</p>
@@ -6035,6 +6477,27 @@ const dataHealthSummary = useMemo(() => {
                     <div className="h-full rounded-full bg-amber-300 transition-all" style={{ width: `${debtProgress}%` }} />
                   </div>
                   <p className="mt-2 text-xs text-slate-300">Progresso da missão: {debtProgress.toFixed(0)}%</p>
+
+                  <div className="mt-4 rounded-2xl border border-white/10 bg-white/8 p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-200">Previsão viva</p>
+                    {debtForecast.isCompleted ? (
+                      <p className="mt-2 text-sm font-bold text-emerald-200">Você já pode negociar essa dívida com o valor do cofrinho.</p>
+                    ) : (
+                      <>
+                        <p className="mt-2 text-base font-bold text-white">Quitação em {debtForecast.monthsToPay} mês(es)</p>
+                        <p className="mt-1 text-sm text-slate-300">ou aproximadamente {debtForecast.daysToPay} dia(s), mantendo a meta mensal de {formatCurrency(monthlyPocketGoal)}.</p>
+                        <p className="mt-2 text-sm text-amber-100">Guardar +R$ 50 hoje antecipa cerca de {debtForecast.daysGainedWithFifty} dia(s).</p>
+                      </>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setAccelerationPanelOpen((current) => !current)}
+                    className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/15"
+                  >
+                    {accelerationPanelOpen ? "Ocultar modo acelerar" : "Quero quitar mais rápido"}
+                  </button>
                 </div>
               </article>
 
@@ -6072,6 +6535,196 @@ const dataHealthSummary = useMemo(() => {
                 </div>
               </article>
             </div>
+
+            {accelerationPanelOpen ? (
+              <section className="app-card border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Modo acelerar</p>
+                    <h3 className="mt-2 text-xl font-black text-slate-900">Escolha um ritmo sem poluir a Home</h3>
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+                      Estes cenários ficam só na área de Dívidas. A Home continua limpa para decisões rápidas do dia.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAccelerationPanelOpen(false)}
+                    className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                  >
+                    Fechar
+                  </button>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+                  {accelerationScenarios.map((scenario) => (
+                    <article
+                      key={scenario.id}
+                      className={`rounded-3xl border p-4 ${
+                        scenario.highlight
+                          ? "border-amber-200 bg-amber-50"
+                          : "border-slate-200 bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            {scenario.extraMonthly > 0 ? `+ ${formatCurrency(scenario.extraMonthly)}/mês` : "Sem aperto extra"}
+                          </p>
+                          <h4 className="mt-1 text-base font-black text-slate-900">{scenario.label}</h4>
+                        </div>
+                        {scenario.highlight ? (
+                          <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-amber-700 shadow-sm">
+                            sugerido
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <p className="mt-3 text-sm leading-5 text-slate-600">{scenario.description}</p>
+
+                      <div className="mt-4 rounded-2xl bg-white/85 p-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta mensal</p>
+                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(scenario.monthlyTotal)}</p>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <div className="rounded-2xl bg-white/70 p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quita em</p>
+                          <p className="mt-1 text-sm font-black text-slate-900">{scenario.monthsToPay} mês(es)</p>
+                        </div>
+                        <div className="rounded-2xl bg-white/70 p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dias</p>
+                          <p className="mt-1 text-sm font-black text-slate-900">{scenario.daysToPay}</p>
+                        </div>
+                      </div>
+
+                      <p className="mt-3 text-sm font-semibold text-slate-700">
+                        {scenario.daysGained > 0
+                          ? `Você ganha cerca de ${scenario.daysGained} dia(s).`
+                          : "Este é o ritmo atual do plano."}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section className="app-card border border-slate-200 bg-white">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Plano automático</p>
+                  <h3 className="mt-2 text-xl font-black text-slate-900">Fila de dívidas</h3>
+                  <p className="mt-1 text-sm text-slate-500">Cadastre apenas o valor real para quitar. A menor dívida aberta vira a missão atual automaticamente.</p>
+                </div>
+
+                <form onSubmit={handleAddDebt} className="w-full space-y-3 lg:max-w-lg">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Nome
+                    </label>
+                    <input
+                      type="text"
+                      value={debtNameInput}
+                      onChange={(event) => setDebtNameInput(event.target.value)}
+                      placeholder="Nome da dívida"
+                      className="app-input w-full"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        Quitar
+                      </span>
+                      <div className="flex min-h-[52px] items-center rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition focus-within:border-sky-300 focus-within:ring-4 focus-within:ring-sky-100">
+                        <span className="mr-2 text-sm font-semibold text-slate-500">R$</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={debtTargetInput}
+                          onChange={(event) => setDebtTargetInput(event.target.value)}
+                          onFocus={() => {
+                            if (!debtTargetInput.trim()) setDebtTargetInput("");
+                          }}
+                          placeholder="0,00"
+                          className="w-full bg-transparent text-sm font-semibold text-slate-900 outline-none placeholder:text-slate-400"
+                        />
+                      </div>
+                    </label>
+
+                    <button type="submit" className="self-end rounded-2xl bg-sky-700 px-5 py-4 text-sm font-black text-white shadow-sm transition hover:bg-sky-800">
+                      Adicionar
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+                {openDebts.length > 0 ? (
+                  openDebts.map((debt, index) => (
+                    <div
+                      key={debt.id}
+                      className={`rounded-3xl border p-4 ${index === 0 ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            {index === 0 ? "Missão atual" : "Próxima da fila"}
+                          </p>
+                          <h4 className="mt-1 text-base font-black text-slate-900">{debt.name}</h4>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
+                          #{index + 1}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl bg-white/80 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Valor para quitar</p>
+                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(debt.target)}</p>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => markDebtAsPaid(debt.id)}
+                          className="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
+                        >
+                          Marcar quitada
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeDebt(debt.id)}
+                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500 md:col-span-2">
+                    Cadastre uma dívida para o app escolher automaticamente sua próxima missão.
+                  </div>
+                )}
+              </div>
+
+              {paidDebts.length > 0 ? (
+                <div className="mt-5 rounded-3xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Quitadas</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {paidDebts.map((debt) => (
+                      <button
+                        key={debt.id}
+                        type="button"
+                        onClick={() => reopenDebt(debt.id)}
+                        className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-emerald-800 shadow-sm"
+                      >
+                        {debt.name} · {formatCurrency(debt.target)} · reabrir
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </section>
 
             <section className="app-card border border-slate-200 bg-white">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -6123,7 +6776,7 @@ const dataHealthSummary = useMemo(() => {
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Visão rápida</p>
                   <h2 className="mt-1 text-lg font-bold text-slate-900">Faturas em destaque</h2>
                 </div>
-                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                   Abrir faturas
                 </Link>
               </div>
@@ -6158,7 +6811,7 @@ const dataHealthSummary = useMemo(() => {
                         <button
                           type="button"
                           onClick={handleGoToInitialBalanceSection}
-                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                         >
                           Ajustar
                         </button>
@@ -6208,38 +6861,20 @@ const dataHealthSummary = useMemo(() => {
           </section>
         ) : null}
 
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-2">
-          <Link
-            href="/invoices"
-            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
+        <section className="flex justify-center">
+          <button
+            type="button"
+            onClick={openSupportMenu}
+            className="group flex items-center gap-3 rounded-[24px] border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
           >
-            <p className="text-sm font-semibold text-slate-900">Cartão de crédito</p>
-            <p className="mt-1 text-xs text-slate-500">Ver faturas e limite.</p>
-          </Link>
-
-          <Link
-            href="/goals"
-            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <p className="text-sm font-semibold text-slate-900">Metas e categorias</p>
-            <p className="mt-1 text-xs text-slate-500">Acompanhar metas do mês.</p>
-          </Link>
-
-          <Link
-            href="/intelligence"
-            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <p className="text-sm font-semibold text-slate-900">Inteligência financeira</p>
-            <p className="mt-1 text-xs text-slate-500">Ver alertas e recomendações.</p>
-          </Link>
-
-          <Link
-            href="/accounts"
-            className="app-card p-4 text-left transition duration-200 hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <p className="text-sm font-semibold text-slate-900">Contas + Cartões</p>
-            <p className="mt-1 text-xs text-slate-500">Gerenciar contas, cartões e saldos.</p>
-          </Link>
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-950 text-2xl font-semibold leading-none text-white shadow-lg transition group-hover:scale-105">
+              +
+            </span>
+            <span>
+              <span className="block text-sm font-bold text-slate-900">Mais opções</span>
+              <span className="mt-0.5 block text-xs text-slate-500">Dívidas, contas, metas e inteligência.</span>
+            </span>
+          </button>
         </section>
 
         <section className="flex flex-wrap items-center justify-start gap-3">
