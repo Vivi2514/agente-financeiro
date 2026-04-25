@@ -26,6 +26,7 @@ type Card = {
   id: string;
   name: string;
   limit?: number;
+  monthlyLimit?: number | null;
   brand?: string | null;
 };
 
@@ -58,6 +59,28 @@ type Transaction = {
     id: string;
     status: "OPEN" | "PAID";
   } | null;
+};
+
+type Invoice = {
+  id: string;
+  cardId: string;
+  month: number;
+  year: number;
+  total: number;
+  status: "OPEN" | "PAID";
+  closedAt?: string | null;
+  dueDate?: string | null;
+  card?: {
+    id: string;
+    name: string;
+    brand?: string | null;
+  } | null;
+};
+
+type CreditCardFutureInvoiceWarning = {
+  invoice: Invoice;
+  closedAt: Date;
+  nextInvoiceLabel: string;
 };
 
 type EditFormState = {
@@ -93,6 +116,16 @@ type ExpenseBlockModalState = {
   projectedBalance: number;
   daysImpact: number;
   payload: TransactionPayload | null;
+  futureInvoiceWarning: CreditCardFutureInvoiceWarning | null;
+  monthlyLimitWarning: {
+    cardName: string;
+    monthlyLimit: number;
+    monthlyUsed: number;
+    projectedMonthlyUsage: number;
+    usagePercent: number;
+    exceededLimit: boolean;
+    heavyExceeded: boolean;
+  } | null;
 };
 
 const EXPENSE_CATEGORIES = [
@@ -274,11 +307,71 @@ function getBaseInstallmentTitle(title?: string | null) {
   return title.replace(/\s*\(\d+\s*\/\s*\d+\)$/, "").trim();
 }
 
+function getInvoiceMonthLabel(month: number, year: number) {
+  return new Date(year, month - 1, 1).toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function getNextInvoiceLabel(invoice: Invoice) {
+  const nextDate = new Date(invoice.year, invoice.month, 1);
+
+  return getInvoiceMonthLabel(nextDate.getMonth() + 1, nextDate.getFullYear());
+}
+
+function getComparableDate(dateValue?: string | null) {
+  if (!dateValue) return null;
+
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function getCreditCardFutureInvoiceWarning(params: {
+  invoices: Invoice[];
+  cardId: string;
+  paymentMethod: PaymentMethod;
+  specialType: SpecialTransactionType;
+  createdAt: string;
+}): CreditCardFutureInvoiceWarning | null {
+  const { invoices, cardId, paymentMethod, specialType, createdAt } = params;
+
+  if (specialType !== "normal") return null;
+  if (paymentMethod !== "credit_card") return null;
+  if (!cardId || !createdAt) return null;
+
+  const openInvoicesForCard = invoices
+    .filter((invoice) => invoice.cardId === cardId && invoice.status === "OPEN")
+    .sort((a, b) => {
+      const aDate = new Date(a.year, a.month - 1, 1).getTime();
+      const bDate = new Date(b.year, b.month - 1, 1).getTime();
+      return bDate - aDate;
+    });
+
+  const manuallyClosedInvoice = openInvoicesForCard.find((invoice) => Boolean(invoice.closedAt));
+  if (!manuallyClosedInvoice?.closedAt) return null;
+
+  const transactionDate = getComparableDate(createdAt + "T12:00:00");
+  const closedAt = getComparableDate(manuallyClosedInvoice.closedAt);
+
+  if (!transactionDate || !closedAt) return null;
+  if (transactionDate.getTime() <= closedAt.getTime()) return null;
+
+  return {
+    invoice: manuallyClosedInvoice,
+    closedAt,
+    nextInvoiceLabel: getNextInvoiceLabel(manuallyClosedInvoice),
+  };
+}
+
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -329,6 +422,8 @@ export default function TransactionsPage() {
     projectedBalance: 0,
     daysImpact: 0,
     payload: null,
+    futureInvoiceWarning: null,
+    monthlyLimitWarning: null,
   });
 
 
@@ -344,14 +439,25 @@ export default function TransactionsPage() {
     return unique;
   }, []);
 
+  const creditCardFutureInvoiceWarning = useMemo(() => {
+    return getCreditCardFutureInvoiceWarning({
+      invoices,
+      cardId,
+      paymentMethod,
+      specialType,
+      createdAt,
+    });
+  }, [invoices, cardId, paymentMethod, specialType, createdAt]);
+
   async function loadData() {
     try {
       setLoading(true);
 
-      const [transactionsRes, accountsRes, cardsRes] = await Promise.all([
+      const [transactionsRes, accountsRes, cardsRes, invoicesRes] = await Promise.all([
         fetch("/api/transactions", { cache: "no-store" }),
         fetch("/api/accounts", { cache: "no-store" }),
         fetch("/api/cards", { cache: "no-store" }),
+        fetch("/api/invoices", { cache: "no-store" }),
       ]);
 
       const transactionsData = transactionsRes.ok
@@ -359,15 +465,18 @@ export default function TransactionsPage() {
         : [];
       const accountsData = accountsRes.ok ? await accountsRes.json() : [];
       const cardsData = cardsRes.ok ? await cardsRes.json() : [];
+      const invoicesData = invoicesRes.ok ? await invoicesRes.json() : [];
 
       setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
       setCards(Array.isArray(cardsData) ? cardsData : []);
+      setInvoices(Array.isArray(invoicesData) ? invoicesData : []);
     } catch (error) {
       console.error("Erro ao carregar dados:", error);
       setTransactions([]);
       setAccounts([]);
       setCards([]);
+      setInvoices([]);
     } finally {
       setLoading(false);
     }
@@ -819,7 +928,7 @@ export default function TransactionsPage() {
     setIsFixed(false);
   }
 
-  function getExpenseBlockSnapshot(amount: number) {
+  function getExpenseBlockSnapshot(amount: number, selectedCardId?: string) {
     const projectedBalance = balance - amount;
     const baseDailyProgress = 10;
     const daysImpact = Math.max(1, Math.ceil(amount / baseDailyProgress));
@@ -827,13 +936,65 @@ export default function TransactionsPage() {
     const consumesLargePartOfBalance =
       availableBalance > 0 ? amount >= availableBalance * 0.4 : amount >= 50;
     const isRelevantExpense = amount >= 50;
+
+    let monthlyLimitWarning: ExpenseBlockModalState["monthlyLimitWarning"] = null;
+
+    if (selectedCardId && paymentMethod === "credit_card" && specialType === "normal") {
+      const selectedCard = cards.find((card) => card.id === selectedCardId);
+      const monthlyLimit = Number(selectedCard?.monthlyLimit || 0);
+
+      if (selectedCard && monthlyLimit > 0) {
+        const [selectedYear, selectedMonth] = selectedMonthValue.split("-").map(Number);
+
+        const monthlyUsed = transactions
+          .filter((transaction) => {
+            if (transaction.cardId !== selectedCardId) return false;
+            if (isAdjustmentTransaction(transaction)) return false;
+            if (normalizeTransactionType(transaction.type) !== "expense") return false;
+            if (transaction.paymentMethod !== "credit_card") return false;
+
+            const transactionDateRaw = transaction.date || transaction.createdAt || "";
+            const transactionDateOnly = normalizeDateOnly(transactionDateRaw);
+
+            if (!transactionDateOnly) return false;
+
+            return (
+              transactionDateOnly.getFullYear() === selectedYear &&
+              transactionDateOnly.getMonth() + 1 === selectedMonth
+            );
+          })
+          .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+
+        const projectedMonthlyUsage = monthlyUsed + amount;
+        const usagePercent = monthlyLimit > 0 ? (projectedMonthlyUsage / monthlyLimit) * 100 : 0;
+        const exceededLimit = usagePercent >= 100;
+        const heavyExceeded = usagePercent >= 120;
+
+        if (usagePercent >= 70) {
+          monthlyLimitWarning = {
+            cardName: selectedCard.name,
+            monthlyLimit,
+            monthlyUsed,
+            projectedMonthlyUsage,
+            usagePercent,
+            exceededLimit,
+            heavyExceeded,
+          };
+        }
+      }
+    }
+
     const shouldBlock =
-      projectedBalance < 0 || consumesLargePartOfBalance || isRelevantExpense;
+      projectedBalance < 0 ||
+      consumesLargePartOfBalance ||
+      isRelevantExpense ||
+      Boolean(monthlyLimitWarning);
 
     return {
       projectedBalance,
       daysImpact,
       shouldBlock,
+      monthlyLimitWarning,
     };
   }
 
@@ -879,6 +1040,8 @@ export default function TransactionsPage() {
       projectedBalance: 0,
       daysImpact: 0,
       payload: null,
+      futureInvoiceWarning: null,
+      monthlyLimitWarning: null,
     });
 
     await createTransaction(payload);
@@ -891,6 +1054,8 @@ export default function TransactionsPage() {
       projectedBalance: 0,
       daysImpact: 0,
       payload: null,
+      futureInvoiceWarning: null,
+      monthlyLimitWarning: null,
     });
   }
 
@@ -978,16 +1143,26 @@ export default function TransactionsPage() {
         : new Date().toISOString(),
     };
 
-    if (!isCardAdjustment && type === "expense") {
-      const snapshot = getExpenseBlockSnapshot(amount);
+    const futureInvoiceWarning = getCreditCardFutureInvoiceWarning({
+      invoices,
+      cardId,
+      paymentMethod,
+      specialType,
+      createdAt,
+    });
 
-      if (snapshot.shouldBlock) {
+    if (!isCardAdjustment && type === "expense") {
+      const snapshot = getExpenseBlockSnapshot(amount, cardId);
+
+      if (snapshot.shouldBlock || futureInvoiceWarning) {
         setExpenseBlockModal({
           open: true,
           amount,
           projectedBalance: snapshot.projectedBalance,
           daysImpact: snapshot.daysImpact,
           payload,
+          futureInvoiceWarning,
+          monthlyLimitWarning: snapshot.monthlyLimitWarning,
         });
         return;
       }
@@ -1679,6 +1854,19 @@ export default function TransactionsPage() {
                 </div>
               )}
 
+              {creditCardFutureInvoiceWarning && (
+                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p className="font-black">⚠️ Essa compra vai para a próxima fatura.</p>
+                  <p className="mt-1">
+                    A fatura atual foi fechada em {creditCardFutureInvoiceWarning.closedAt.toLocaleDateString("pt-BR")}.
+                    Esse lançamento será considerado para {creditCardFutureInvoiceWarning.nextInvoiceLabel}.
+                  </p>
+                  <p className="mt-2 text-xs text-amber-800">
+                    Pausa rápida: confirme se vale mesmo usar crédito agora ou se é melhor pagar no débito/Pix.
+                  </p>
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={submitting}
@@ -2172,7 +2360,7 @@ export default function TransactionsPage() {
                     Esse gasto pede uma decisão consciente
                   </h3>
                   <p className="mt-2 text-sm text-slate-300">
-                    Antes de salvar, o app está mostrando o impacto desse lançamento no seu plano anti-dívida.
+                    Antes de salvar, o app está mostrando o impacto desse lançamento no seu plano anti-dívida{expenseBlockModal.futureInvoiceWarning ? " e na próxima fatura" : ""}.
                   </p>
                 </div>
 
@@ -2221,6 +2409,74 @@ export default function TransactionsPage() {
                   </p>
                 </div>
               </div>
+
+              {expenseBlockModal.futureInvoiceWarning && (
+                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p className="font-black">Essa compra vai para a próxima fatura.</p>
+                  <div className="mt-2 space-y-1">
+                    <p>• A fatura atual fechou em {expenseBlockModal.futureInvoiceWarning.closedAt.toLocaleDateString("pt-BR")}.</p>
+                    <p>• Esse lançamento será considerado para {expenseBlockModal.futureInvoiceWarning.nextInvoiceLabel}.</p>
+                    <p>• Pense se vale usar crédito agora ou se é melhor pagar no débito/Pix.</p>
+                  </div>
+                </div>
+              )}
+
+              {expenseBlockModal.monthlyLimitWarning && (
+                <div
+                  className={`rounded-3xl border p-4 text-sm ${
+                    expenseBlockModal.monthlyLimitWarning.exceededLimit
+                      ? "border-rose-200 bg-rose-50 text-rose-900"
+                      : "border-amber-200 bg-amber-50 text-amber-900"
+                  }`}
+                >
+                  <p className="font-black">
+                    {expenseBlockModal.monthlyLimitWarning.exceededLimit
+                      ? "Limite mensal do cartão estourado."
+                      : "Você está perto do seu limite mensal do cartão."}
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl bg-white/70 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                        Cartão
+                      </p>
+                      <p className="mt-1 font-black">
+                        {expenseBlockModal.monthlyLimitWarning.cardName}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-white/70 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                        Uso previsto
+                      </p>
+                      <p className="mt-1 font-black">
+                        {expenseBlockModal.monthlyLimitWarning.usagePercent.toFixed(0)}%
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-white/70 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                        Limite mensal
+                      </p>
+                      <p className="mt-1 font-black">
+                        {formatCurrency(expenseBlockModal.monthlyLimitWarning.monthlyLimit)}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-white/70 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                        Após essa compra
+                      </p>
+                      <p className="mt-1 font-black">
+                        {formatCurrency(expenseBlockModal.monthlyLimitWarning.projectedMonthlyUsage)}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-3">
+                    {expenseBlockModal.monthlyLimitWarning.heavyExceeded
+                      ? "Esse gasto passa muito do limite que você definiu. O melhor caminho é trocar por débito/Pix ou adiar."
+                      : expenseBlockModal.monthlyLimitWarning.exceededLimit
+                      ? "Esse gasto passa do limite que você mesma definiu para este cartão. Confirme só se for realmente necessário."
+                      : "Esse gasto ainda não estoura seu limite, mas deixa o cartão em zona de atenção."}
+                  </p>
+                </div>
+              )}
 
               <div className="rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
                 <p className="font-black">Esse gasto pode atrapalhar sua missão.</p>

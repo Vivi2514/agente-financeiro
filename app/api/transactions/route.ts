@@ -204,6 +204,60 @@ async function getOrCreateOpenInvoice(
   });
 }
 
+
+function addMonthsToReference(year: number, month: number, monthsToAdd: number) {
+  const reference = new Date(year, month - 1 + monthsToAdd, 1);
+
+  return {
+    month: reference.getMonth() + 1,
+    year: reference.getFullYear(),
+  };
+}
+
+async function getInvoiceStartOffsetForCreditPurchase(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    cardId: string;
+    purchaseDate: Date;
+  }
+) {
+  const { userId, cardId, purchaseDate } = params;
+  const purchaseDay = startOfDay(purchaseDate);
+  const purchaseMonth = purchaseDate.getMonth() + 1;
+  const purchaseYear = purchaseDate.getFullYear();
+
+  const currentInvoice = await tx.invoice.findFirst({
+    where: {
+      userId,
+      cardId,
+      month: purchaseMonth,
+      year: purchaseYear,
+    },
+    select: {
+      id: true,
+      closedAt: true,
+      status: true,
+    },
+  });
+
+  if (!currentInvoice?.closedAt) {
+    return 0;
+  }
+
+  if (currentInvoice.status === InvoiceStatus.PAID) {
+    return 1;
+  }
+
+  const closedDay = startOfDay(currentInvoice.closedAt);
+
+  if (purchaseDay.getTime() > closedDay.getTime()) {
+    return 1;
+  }
+
+  return 0;
+}
+
 async function validateCardLimit(
   tx: Prisma.TransactionClient,
   params: {
@@ -438,6 +492,15 @@ export async function POST(req: Request) {
         });
       }
 
+      const invoiceStartOffset =
+        isCreditCardPayment && normalizedCardId && isExpense
+          ? await getInvoiceStartOffsetForCreditPurchase(tx, {
+              userId: user.id,
+              cardId: normalizedCardId,
+              purchaseDate: parsedDate,
+            })
+          : 0;
+
       if (isInstallmentPurchase && normalizedCardId) {
         const purchaseGroupId = randomUUID();
         const baseInstallmentAmount = Number(
@@ -451,14 +514,17 @@ export async function POST(req: Request) {
           const installmentDate = new Date(parsedDate);
           installmentDate.setMonth(parsedDate.getMonth() + (i - 1));
 
-          const month = installmentDate.getMonth() + 1;
-          const year = installmentDate.getFullYear();
+          const invoiceReference = addMonthsToReference(
+            parsedDate.getFullYear(),
+            parsedDate.getMonth() + 1,
+            invoiceStartOffset + (i - 1)
+          );
 
           const invoice = await getOrCreateOpenInvoice(tx, {
             userId: user.id,
             cardId: normalizedCardId,
-            month,
-            year,
+            month: invoiceReference.month,
+            year: invoiceReference.year,
           });
 
           const installmentAmount =
@@ -523,14 +589,17 @@ export async function POST(req: Request) {
       let invoiceId: string | null = null;
 
       if (isCreditCardPayment && isExpense && normalizedCardId) {
-        const month = parsedDate.getMonth() + 1;
-        const year = parsedDate.getFullYear();
+        const invoiceReference = addMonthsToReference(
+          parsedDate.getFullYear(),
+          parsedDate.getMonth() + 1,
+          invoiceStartOffset
+        );
 
         const invoice = await getOrCreateOpenInvoice(tx, {
           userId: user.id,
           cardId: normalizedCardId,
-          month,
-          year,
+          month: invoiceReference.month,
+          year: invoiceReference.year,
         });
 
         invoiceId = invoice.id;

@@ -57,6 +57,7 @@ model Invoice {
   cardId            String
   userId            String
   paidAt            DateTime?
+  closedAt          DateTime?
   paidFromAccountId String?
   status            InvoiceStatus @default(OPEN)
   card              cards         @relation(fields: [cardId], references: [id], onDelete: Cascade)
@@ -116,6 +117,7 @@ model cards {
   name                  String
   brand                 String?
   limit                 Decimal?               @db.Decimal(10, 2)
+  monthlyLimit         Decimal?
   closingDay            Int?
   dueDay                Int?
   userId                String

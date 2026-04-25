@@ -111,6 +111,7 @@ type Invoice = {
   status: "OPEN" | "PAID";
   dueDate?: string | null;
   paidAt?: string | null;
+  closedAt?: string | null;
   paidFromAccountId?: string | null;
   card?: {
     id: string;
@@ -414,6 +415,7 @@ function getAlertStateStorageKey(selectedMonth: string) {
   return `alert-states:${selectedMonth}`;
 }
 
+
 function isExpenseType(type?: string | null) {
   if (!type) return false;
   const normalized = type.toLowerCase();
@@ -518,6 +520,24 @@ function getDateDifferenceInDays(expectedDate?: string | null, actualDate?: stri
   return Math.round(diffMs / (1000 * 60 * 60 * 24));
 }
 
+
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function getNextInvoiceReference(invoice: Invoice) {
+  const currentReference = new Date(invoice.year, invoice.month - 1, 1);
+  const nextReference = addMonths(currentReference, 1);
+
+  return {
+    month: nextReference.getMonth() + 1,
+    year: nextReference.getFullYear(),
+    label: formatInvoiceLabel(nextReference.getMonth() + 1, nextReference.getFullYear()),
+  };
+}
+
 function getAlertStyles(tone: SmartAlert["tone"]) {
   switch (tone) {
     case "danger":
@@ -602,6 +622,8 @@ type AlertStateItem = {
   snoozeUntil?: string;
   monthKey?: string;
 };
+
+
 
 type DailyReviewChecklist = {
   transactions: boolean;
@@ -1165,6 +1187,89 @@ export default function DashboardPage() {
     }
 
     section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+
+  async function handleMarkInvoiceManuallyClosed(invoice: Invoice) {
+    const suggestedDate = new Date().toISOString().slice(0, 10);
+    const closedAtInput = window.prompt(
+      `Informe a data real de fechamento da fatura ${invoice.card?.name || "cartão"} (${formatInvoiceLabel(invoice.month, invoice.year)}):`,
+      suggestedDate
+    );
+
+    if (closedAtInput === null) return;
+
+    const closedAt = closedAtInput.trim();
+    const parsedDate = new Date(`${closedAt}T12:00:00`);
+
+    if (!closedAt || Number.isNaN(parsedDate.getTime())) {
+      showToast(
+        "Data inválida",
+        "Informe a data no formato AAAA-MM-DD para marcar a fatura como fechada.",
+        "error"
+      );
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/close`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ closedAt }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Não foi possível fechar a fatura.");
+      }
+
+      await loadDashboardData();
+
+      const nextReference = getNextInvoiceReference(invoice);
+
+      showToast(
+        "Fatura fechada",
+        `Novas compras no ${invoice.card?.name || "cartão"} depois de ${parsedDate.toLocaleDateString("pt-BR")} serão tratadas como próxima fatura (${nextReference.label}).`,
+        "success"
+      );
+    } catch (error) {
+      showToast(
+        "Erro ao fechar fatura",
+        error instanceof Error ? error.message : "Tente novamente.",
+        "error"
+      );
+    }
+  }
+
+  async function handleReopenManuallyClosedInvoice(invoiceId: string) {
+    try {
+      const response = await fetch(`/api/invoices/${invoiceId}/reopen`, {
+        method: "PATCH",
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Não foi possível reabrir a fatura.");
+      }
+
+      await loadDashboardData();
+
+      showToast(
+        "Fatura reaberta",
+        "A fatura voltou a aceitar compras no ciclo atual.",
+        "info"
+      );
+    } catch (error) {
+      showToast(
+        "Erro ao reabrir fatura",
+        error instanceof Error ? error.message : "Tente novamente.",
+        "error"
+      );
+    }
   }
 
   async function handleResetAllData() {
@@ -1944,12 +2049,108 @@ export default function DashboardPage() {
       });
   }, [invoices]);
 
+  const invoiceDisplayTotals = useMemo(() => {
+    const result: Record<string, number> = {};
+
+    openInvoices.forEach((invoice) => {
+      const originalTotal = Number(invoice.total || 0);
+
+      if (!invoice.closedAt) {
+        result[invoice.id] = originalTotal;
+        return;
+      }
+
+      const closedAtDate = startOfDay(new Date(invoice.closedAt));
+
+      if (Number.isNaN(closedAtDate.getTime())) {
+        result[invoice.id] = originalTotal;
+        return;
+      }
+
+      const afterClosureTotal = transactions
+        .filter((transaction) => {
+          if (isAdjustmentTransaction(transaction)) return false;
+          if (!isExpenseType(transaction.type)) return false;
+          if (normalizeComparableText(transaction.paymentMethod) !== "credit_card") return false;
+          if ((transaction.cardId || "") !== invoice.cardId) return false;
+
+          const transactionDate = startOfDay(new Date(getTransactionEffectiveDate(transaction)));
+
+          if (Number.isNaN(transactionDate.getTime())) return false;
+
+          return transactionDate.getTime() > closedAtDate.getTime();
+        })
+        .reduce((sum, transaction) => sum + getTransactionEffectiveAmount(transaction), 0);
+
+      result[invoice.id] = Math.max(originalTotal - afterClosureTotal, 0);
+    });
+
+    return result;
+  }, [openInvoices, transactions]);
+
+  function getInvoiceDisplayTotal(invoice: Invoice) {
+    return Number(invoiceDisplayTotals[invoice.id] ?? invoice.total ?? 0);
+  }
+
   const openInvoicesTotal = useMemo(() => {
     return openInvoices.reduce(
-      (sum, invoice) => sum + Number(invoice.total || 0),
+      (sum, invoice) => sum + Number(invoiceDisplayTotals[invoice.id] ?? invoice.total ?? 0),
       0
     );
+  }, [invoiceDisplayTotals, openInvoices]);
+
+
+  const manuallyClosedOpenInvoices = useMemo(() => {
+    return openInvoices.filter((invoice) => Boolean(invoice.closedAt));
   }, [openInvoices]);
+
+  const creditPurchasesAfterManualClosure = useMemo(() => {
+    return manuallyClosedOpenInvoices
+      .map((invoice) => {
+        const closure = invoice.closedAt || null;
+        const closedAtDate = closure ? startOfDay(new Date(closure)) : null;
+        const nextReference = getNextInvoiceReference(invoice);
+
+        if (!closedAtDate || Number.isNaN(closedAtDate.getTime())) {
+          return {
+            invoice,
+            closedAt: closure,
+            nextReference,
+            transactions: [] as Transaction[],
+            total: 0,
+          };
+        }
+
+        const transactionsAfterClosure = transactions.filter((transaction) => {
+          if (isAdjustmentTransaction(transaction)) return false;
+          if (!isExpenseType(transaction.type)) return false;
+          if (normalizeComparableText(transaction.paymentMethod) !== "credit_card") return false;
+          if ((transaction.cardId || "") !== invoice.cardId) return false;
+
+          const transactionDate = startOfDay(new Date(getTransactionEffectiveDate(transaction)));
+
+          if (Number.isNaN(transactionDate.getTime())) return false;
+
+          return transactionDate.getTime() > closedAtDate.getTime();
+        });
+
+        return {
+          invoice,
+          closure,
+          nextReference,
+          transactions: transactionsAfterClosure,
+          total: transactionsAfterClosure.reduce(
+            (sum, transaction) => sum + getTransactionEffectiveAmount(transaction),
+            0
+          ),
+        };
+      })
+      .filter((item) => item.transactions.length > 0);
+  }, [manuallyClosedOpenInvoices, transactions]);
+
+  const creditPurchasesAfterManualClosureTotal = useMemo(() => {
+    return creditPurchasesAfterManualClosure.reduce((sum, item) => sum + item.total, 0);
+  }, [creditPurchasesAfterManualClosure]);
 
   const cardPreviousBalanceTotal = useMemo(() => {
     return Math.max(openInvoicesTotal - selectedMonthCreditPurchasesTotal, 0);
@@ -1970,10 +2171,10 @@ export default function DashboardPage() {
 
   const selectedMonthOpenInvoicesTotal = useMemo(() => {
     return selectedMonthOpenInvoices.reduce(
-      (sum, invoice) => sum + Number(invoice.total || 0),
+      (sum, invoice) => sum + getInvoiceDisplayTotal(invoice),
       0
     );
-  }, [selectedMonthOpenInvoices]);
+  }, [invoiceDisplayTotals, selectedMonthOpenInvoices]);
 
 
   const projectedMonthIncomeEntries = useMemo(() => {
@@ -2062,7 +2263,7 @@ export default function DashboardPage() {
       .map((invoice) => ({
         id: `invoice-${invoice.id}`,
         title: `Fatura ${invoice.card?.name || "cartão"}`,
-        amount: Number(invoice.total || 0),
+        amount: getInvoiceDisplayTotal(invoice),
         date: invoice.dueDate ? new Date(invoice.dueDate) : new Date(invoice.year, invoice.month - 1, 10),
         kind: "invoice" as const,
         source: "invoice" as const,
@@ -2071,7 +2272,7 @@ export default function DashboardPage() {
           : formatInvoiceLabel(invoice.month, invoice.year),
       }))
       .sort((a, b) => a.date.getTime() - b.date.getTime());
-  }, [selectedMonthOpenInvoices]);
+  }, [invoiceDisplayTotals, selectedMonthOpenInvoices]);
 
   const projectedMonthIncomeTotal = useMemo(() => {
     return projectedMonthIncomeEntries.reduce((sum, item) => sum + item.amount, 0);
@@ -3774,7 +3975,7 @@ export default function DashboardPage() {
       .map((invoice) => ({
         id: invoice.id,
         label: formatInvoiceLabel(invoice.month, invoice.year),
-        total: Number(invoice.total || 0),
+        total: getInvoiceDisplayTotal(invoice),
         cardName: invoice.card?.name || "Cartão",
       }));
 
@@ -6794,27 +6995,42 @@ const dataHealthSummary = useMemo(() => {
                           <p className="text-sm font-semibold text-slate-900">{invoice.card?.name || "Cartão"}</p>
                           <p className="mt-1 text-xs text-slate-500">{formatInvoiceLabel(invoice.month, invoice.year)}</p>
                         </div>
-                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${invoice.status === "OPEN" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-                          {invoice.status === "OPEN" ? "Aberta" : "Paga"}
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${invoice.closedAt ? "bg-slate-900 text-white" : invoice.status === "OPEN" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                          {invoice.closedAt ? "Fechada" : invoice.status === "OPEN" ? "Aberta" : "Paga"}
                         </span>
                       </div>
 
-                      <p className="mt-5 text-2xl font-bold text-slate-900">{formatCurrency(invoice.total)}</p>
+                      <p className="mt-5 text-2xl font-bold text-slate-900">{formatCurrency(getInvoiceDisplayTotal(invoice))}</p>
                       <p className="mt-2 text-sm text-slate-500">
                         {invoice.dueDate ? `Vence em ${new Date(invoice.dueDate).toLocaleDateString("pt-BR")}` : "Sem vencimento informado"}
                       </p>
+                      {invoice.closedAt ? (
+                        <p className="mt-2 rounded-2xl bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
+                          Fechada manualmente em {new Date(invoice.closedAt || "").toLocaleDateString("pt-BR")}. Compras depois dessa data vão para a próxima fatura.
+                        </p>
+                      ) : null}
 
-                      <div className="mt-5 flex gap-2">
+                      <div className="mt-5 flex flex-wrap gap-2">
                         <Link href="/invoices" className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800">
                           Pagar
                         </Link>
-                        <button
-                          type="button"
-                          onClick={handleGoToInitialBalanceSection}
-                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                          Ajustar
-                        </button>
+                        {invoice.closedAt ? (
+                          <button
+                            type="button"
+                            onClick={() => handleReopenManuallyClosedInvoice(invoice.id)}
+                            className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                          >
+                            Reabrir
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleMarkInvoiceManuallyClosed(invoice)}
+                            className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                          >
+                            Fechar
+                          </button>
+                        )}
                       </div>
                     </article>
                   ))}

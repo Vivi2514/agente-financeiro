@@ -42,6 +42,7 @@ export async function GET() {
       status: invoice.status,
       dueDate: getInvoiceDueDate(invoice.year, invoice.month, invoice.card?.dueDay),
       paidAt: invoice.paidAt,
+      closedAt: invoice.closedAt,
       paidFromAccountId: invoice.paidFromAccountId,
       createdAt: invoice.createdAt,
       updatedAt: invoice.updatedAt,
