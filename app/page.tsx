@@ -528,6 +528,26 @@ function addMonths(date: Date, months: number) {
 }
 
 function getNextInvoiceReference(invoice: Invoice) {
+  if (invoice.dueDate) {
+    const dueDate = startOfDay(new Date(invoice.dueDate));
+
+    if (!Number.isNaN(dueDate.getTime())) {
+      const nextDueReference = addMonths(
+        new Date(dueDate.getFullYear(), dueDate.getMonth(), 1),
+        1
+      );
+
+      return {
+        month: nextDueReference.getMonth() + 1,
+        year: nextDueReference.getFullYear(),
+        label: formatInvoiceLabel(
+          nextDueReference.getMonth() + 1,
+          nextDueReference.getFullYear()
+        ),
+      };
+    }
+  }
+
   const currentReference = new Date(invoice.year, invoice.month - 1, 1);
   const nextReference = addMonths(currentReference, 1);
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 type Account = {
   id: string;
@@ -13,6 +13,7 @@ type Card = {
   id: string;
   name: string;
   limit?: number | null;
+  monthlyLimit?: number | null;
   brand?: string | null;
 };
 
@@ -48,9 +49,35 @@ type Invoice = {
   transactions?: InvoiceTransaction[];
 };
 
+type FutureTransactionGroup = {
+  id: string;
+  title: string;
+  category?: string | null;
+  firstDate: string;
+  totalAmount: number;
+  installmentAmount: number;
+  installmentCount: number;
+  isInstallment: boolean;
+  transactions: InvoiceTransaction[];
+};
+
+
+type FutureInvoiceProjectionItem = {
+  id: string;
+  cardId: string;
+  cardName: string;
+  month: number;
+  year: number;
+  label: string;
+  total: number;
+  transactionCount: number;
+  groups: FutureTransactionGroup[];
+};
+
 type InvoiceDisplayDetails = {
   transactions: InvoiceTransaction[];
   futureTransactions: InvoiceTransaction[];
+  futureTransactionGroups: FutureTransactionGroup[];
   adjustmentTotal: number;
   displayTotal: number;
   isClosed: boolean;
@@ -174,23 +201,248 @@ function isAfterInvoiceClosure(
   );
 }
 
-function getInvoiceDisplayDetails(invoice: Invoice): InvoiceDisplayDetails {
-  const allTransactions = invoice.transactions || [];
+function isCreditCardExpenseTransaction(transaction: InvoiceTransaction) {
+  const normalizedType = (transaction.type || "").toLowerCase();
+  const normalizedPaymentMethod = (transaction.paymentMethod || "").toLowerCase();
+
+  return (
+    normalizedPaymentMethod === "credit_card" &&
+    (normalizedType === "expense" || normalizedType === "saida" || normalizedType === "saída")
+  );
+}
+
+function removeDuplicatedTransactions(transactions: InvoiceTransaction[]) {
+  const seen = new Set<string>();
+
+  return transactions.filter((transaction) => {
+    if (seen.has(transaction.id)) return false;
+    seen.add(transaction.id);
+    return true;
+  });
+}
+
+function getInstallmentInfoFromTitle(title?: string | null) {
+  if (!title) return null;
+
+  const match = title.trim().match(/\((\d+)\s*\/\s*(\d+)\)$/);
+  if (!match) return null;
+
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 1) {
+    return null;
+  }
+
+  return { current, total };
+}
+
+function getBaseInstallmentTitle(title?: string | null) {
+  if (!title) return "";
+  return title.replace(/\s*\(\d+\s*\/\s*\d+\)$/, "").trim();
+}
+
+function getFutureTransactionGroups(transactions: InvoiceTransaction[]) {
+  const grouped = new Map<string, FutureTransactionGroup>();
+
+  transactions.forEach((transaction) => {
+    const installmentInfo = getInstallmentInfoFromTitle(transaction.title);
+    const baseTitle = installmentInfo
+      ? getBaseInstallmentTitle(transaction.title)
+      : transaction.title;
+    const roundedAmount = Number(transaction.amount || 0).toFixed(2);
+    const groupKey = installmentInfo
+      ? [
+          transaction.cardId || "sem-cartao",
+          baseTitle.toLowerCase(),
+          transaction.category || "sem-categoria",
+          roundedAmount,
+          installmentInfo.total,
+        ].join("|")
+      : transaction.id;
+
+    const existing = grouped.get(groupKey);
+
+    if (!existing) {
+      grouped.set(groupKey, {
+        id: groupKey,
+        title: baseTitle,
+        category: transaction.category,
+        firstDate: transaction.date,
+        totalAmount: Number(transaction.amount || 0),
+        installmentAmount: Number(transaction.amount || 0),
+        installmentCount: 1,
+        isInstallment: Boolean(installmentInfo),
+        transactions: [transaction],
+      });
+      return;
+    }
+
+    const transactionDate = parseLocalDate(transaction.date)?.getTime() || 0;
+    const currentFirstDate = parseLocalDate(existing.firstDate)?.getTime() || 0;
+
+    grouped.set(groupKey, {
+      ...existing,
+      firstDate:
+        transactionDate > 0 && (currentFirstDate === 0 || transactionDate < currentFirstDate)
+          ? transaction.date
+          : existing.firstDate,
+      totalAmount: existing.totalAmount + Number(transaction.amount || 0),
+      installmentCount: existing.installmentCount + 1,
+      transactions: [...existing.transactions, transaction],
+    });
+  });
+
+  return Array.from(grouped.values()).sort((a, b) => {
+    const aDate = parseLocalDate(a.firstDate)?.getTime() || 0;
+    const bDate = parseLocalDate(b.firstDate)?.getTime() || 0;
+
+    if (aDate !== bDate) return aDate - bDate;
+    return a.title.localeCompare(b.title, "pt-BR");
+  });
+}
+
+
+function addMonthsToReference(month: number, year: number, amount: number) {
+  const date = new Date(year, month - 1 + amount, 1);
+
+  return {
+    month: date.getMonth() + 1,
+    year: date.getFullYear(),
+  };
+}
+
+function getMonthDifference(from: Date, to: Date) {
+  return (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
+}
+
+function getProjectionAnchorInvoice(cardId: string, invoices: Invoice[]) {
+  return invoices
+    .filter((invoice) => invoice.cardId === cardId && Boolean(invoice.closedAt))
+    .sort((a, b) => {
+      const aClosed = parseLocalDate(a.closedAt)?.getTime() || 0;
+      const bClosed = parseLocalDate(b.closedAt)?.getTime() || 0;
+      return bClosed - aClosed;
+    })[0];
+}
+
+function getProjectedInvoiceReference(transaction: InvoiceTransaction, anchorInvoice: Invoice) {
+  const transactionDate = parseLocalDate(transaction.date);
+  const closureDate = parseLocalDate(anchorInvoice.closedAt);
+  const dueDate = parseLocalDate(anchorInvoice.dueDate);
+
+  if (!transactionDate || !closureDate) return null;
+
+  const normalizedTransactionDate = startOfDay(transactionDate);
+  const normalizedClosureDate = startOfDay(closureDate);
+
+  if (normalizedTransactionDate.getTime() <= normalizedClosureDate.getTime()) {
+    return null;
+  }
+
+  const monthDifference = Math.max(getMonthDifference(closureDate, transactionDate), 0);
+  const crossedNextClosureDay = transactionDate.getDate() > closureDate.getDate() ? 1 : 0;
+  const monthsAfterClosedInvoice = Math.max(monthDifference + crossedNextClosureDay, 1);
+
+  const baseReference = dueDate
+    ? { month: dueDate.getMonth() + 1, year: dueDate.getFullYear() }
+    : { month: anchorInvoice.month, year: anchorInvoice.year };
+
+  return addMonthsToReference(
+    baseReference.month,
+    baseReference.year,
+    monthsAfterClosedInvoice,
+  );
+}
+
+function getFutureInvoicesProjection(params: {
+  transactions: InvoiceTransaction[];
+  invoices: Invoice[];
+  cards: Card[];
+}) {
+  const { transactions, invoices, cards } = params;
+  const grouped = new Map<string, FutureInvoiceProjectionItem>();
+  const uniqueTransactions = removeDuplicatedTransactions(transactions);
+
+  uniqueTransactions.forEach((transaction) => {
+    if (!transaction.cardId) return;
+    if (transaction.isAdjustment) return;
+    if (!isCreditCardExpenseTransaction(transaction)) return;
+
+    const anchorInvoice = getProjectionAnchorInvoice(transaction.cardId, invoices);
+    if (!anchorInvoice) return;
+
+    const projectedReference = getProjectedInvoiceReference(transaction, anchorInvoice);
+    if (!projectedReference) return;
+
+    const cardName =
+      anchorInvoice.card?.name ||
+      cards.find((card) => card.id === transaction.cardId)?.name ||
+      "Cartão";
+
+    const key = `${transaction.cardId}-${projectedReference.year}-${projectedReference.month}`;
+    const existing = grouped.get(key);
+    const nextTransactions = existing
+      ? [...existing.groups.flatMap((group) => group.transactions), transaction]
+      : [transaction];
+    const nextGroups = getFutureTransactionGroups(nextTransactions);
+    const nextTotal = nextGroups.reduce((sum, group) => sum + Number(group.totalAmount || 0), 0);
+    const nextTransactionCount = nextGroups.reduce(
+      (sum, group) => sum + Number(group.transactions.length || 0),
+      0,
+    );
+
+    grouped.set(key, {
+      id: key,
+      cardId: transaction.cardId,
+      cardName,
+      month: projectedReference.month,
+      year: projectedReference.year,
+      label: getInvoiceLabel(projectedReference.month, projectedReference.year),
+      total: nextTotal,
+      transactionCount: nextTransactionCount,
+      groups: nextGroups,
+    });
+  });
+
+  return Array.from(grouped.values()).sort((a, b) => {
+    const aDate = new Date(a.year, a.month - 1, 1).getTime();
+    const bDate = new Date(b.year, b.month - 1, 1).getTime();
+
+    if (aDate !== bDate) return aDate - bDate;
+    return a.cardName.localeCompare(b.cardName, "pt-BR");
+  });
+}
+
+function getInvoiceDisplayDetails(
+  invoice: Invoice,
+  allCreditTransactions: InvoiceTransaction[] = [],
+): InvoiceDisplayDetails {
+  const invoiceTransactions = invoice.transactions || [];
   const isClosed = invoice.status === "OPEN" && Boolean(invoice.closedAt);
 
-  const futureTransactions = isClosed
-    ? allTransactions.filter(
-        (transaction) =>
-          !transaction.isAdjustment &&
-          isAfterInvoiceClosure(transaction, invoice.closedAt),
-      )
-    : [];
-
   const currentInvoiceTransactions = isClosed
-    ? allTransactions.filter(
+    ? invoiceTransactions.filter(
         (transaction) => !isAfterInvoiceClosure(transaction, invoice.closedAt),
       )
-    : allTransactions;
+    : invoiceTransactions;
+
+  const futureTransactions = isClosed
+    ? removeDuplicatedTransactions(
+        [...invoiceTransactions, ...allCreditTransactions]
+          .filter((transaction) => {
+            if (transaction.cardId !== invoice.cardId) return false;
+            if (transaction.isAdjustment) return false;
+            if (!isCreditCardExpenseTransaction(transaction)) return false;
+            return isAfterInvoiceClosure(transaction, invoice.closedAt);
+          })
+          .sort((a, b) => {
+            const aDate = parseLocalDate(a.date)?.getTime() || 0;
+            const bDate = parseLocalDate(b.date)?.getTime() || 0;
+            return aDate - bDate;
+          }),
+      )
+    : [];
 
   const transactions = currentInvoiceTransactions.filter(
     (transaction) => !transaction.isAdjustment,
@@ -210,13 +462,16 @@ function getInvoiceDisplayDetails(invoice: Invoice): InvoiceDisplayDetails {
       ? calculatedTotal
       : Number(invoice.total || 0);
 
+  const futureTransactionGroups = getFutureTransactionGroups(futureTransactions);
+
   return {
     transactions,
     futureTransactions,
+    futureTransactionGroups,
     adjustmentTotal,
     displayTotal,
     isClosed,
-    hiddenAfterClosureCount: futureTransactions.length,
+    hiddenAfterClosureCount: futureTransactionGroups.length,
   };
 }
 
@@ -269,6 +524,7 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [transactions, setTransactions] = useState<InvoiceTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedAccounts, setSelectedAccounts] = useState<
     Record<string, string>
@@ -277,6 +533,16 @@ export default function InvoicesPage() {
   const [expandedInvoiceIds, setExpandedInvoiceIds] = useState<
     Record<string, boolean>
   >({});
+  const [expandedFutureProjectionIds, setExpandedFutureProjectionIds] = useState<
+    Record<string, boolean>
+  >({});
+
+  function toggleFutureProjectionExpanded(projectionId: string) {
+    setExpandedFutureProjectionIds((current) => ({
+      ...current,
+      [projectionId]: !current[projectionId],
+    }));
+  }
 
   function toggleInvoiceExpanded(invoiceId: string) {
     setExpandedInvoiceIds((current) => ({
@@ -289,12 +555,17 @@ export default function InvoicesPage() {
     try {
       setLoading(true);
 
-      const [invoicesResponse, accountsResponse, cardsResponse] =
-        await Promise.all([
-          fetch("/api/invoices", { cache: "no-store" }),
-          fetch("/api/accounts", { cache: "no-store" }),
-          fetch("/api/cards", { cache: "no-store" }),
-        ]);
+      const [
+        invoicesResponse,
+        accountsResponse,
+        cardsResponse,
+        transactionsResponse,
+      ] = await Promise.all([
+        fetch("/api/invoices", { cache: "no-store" }),
+        fetch("/api/accounts", { cache: "no-store" }),
+        fetch("/api/cards", { cache: "no-store" }),
+        fetch("/api/transactions", { cache: "no-store" }),
+      ]);
 
       if (!invoicesResponse.ok) {
         throw new Error("Erro ao buscar faturas");
@@ -305,15 +576,20 @@ export default function InvoicesPage() {
         ? await accountsResponse.json()
         : [];
       const cardsData = cardsResponse.ok ? await cardsResponse.json() : [];
+      const transactionsData = transactionsResponse.ok
+        ? await transactionsResponse.json()
+        : [];
 
       setInvoices(Array.isArray(invoicesData) ? invoicesData : []);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
       setCards(Array.isArray(cardsData) ? cardsData : []);
+      setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
     } catch (error) {
       console.error("Erro ao carregar faturas:", error);
       setInvoices([]);
       setAccounts([]);
       setCards([]);
+      setTransactions([]);
     } finally {
       setLoading(false);
     }
@@ -374,7 +650,7 @@ export default function InvoicesPage() {
 
   const displayInvoices = useMemo<DisplayInvoice[]>(() => {
     return invoices.map((invoice) => {
-      const details = getInvoiceDisplayDetails(invoice);
+      const details = getInvoiceDisplayDetails(invoice, transactions);
 
       return {
         ...invoice,
@@ -383,7 +659,7 @@ export default function InvoicesPage() {
         presentation: getInvoicePresentation(invoice, details),
       };
     });
-  }, [invoices]);
+  }, [invoices, transactions]);
 
   const openInvoices = useMemo(() => {
     return displayInvoices.filter((invoice) => invoice.status === "OPEN");
@@ -397,7 +673,12 @@ export default function InvoicesPage() {
   }, [openInvoices]);
 
   const totalCardLimit = useMemo(() => {
-    return cards.reduce((sum, card) => sum + Number(card.limit || 0), 0);
+    return cards.reduce((sum, card) => {
+      const consciousLimit = Number(card.monthlyLimit || 0);
+      const bankLimit = Number(card.limit || 0);
+
+      return sum + (consciousLimit > 0 ? consciousLimit : bankLimit);
+    }, 0);
   }, [cards]);
 
   const totalUsedLimit = useMemo(() => {
@@ -408,13 +689,37 @@ export default function InvoicesPage() {
   }, [openInvoices]);
 
   const totalAvailableLimit = useMemo(() => {
-    return Math.max(totalCardLimit - totalUsedLimit, 0);
+    return totalCardLimit - totalUsedLimit;
   }, [totalCardLimit, totalUsedLimit]);
 
+  const futureInvoicesProjection = useMemo(() => {
+    return getFutureInvoicesProjection({
+      transactions,
+      invoices,
+      cards,
+    });
+  }, [transactions, invoices, cards]);
+
+  const futureInvoicesTotal = useMemo(() => {
+    return futureInvoicesProjection.reduce(
+      (sum, item) => sum + Number(item.total || 0),
+      0,
+    );
+  }, [futureInvoicesProjection]);
+
   const invoicesOrdered = useMemo(() => {
+    function getInvoicePriority(invoice: DisplayInvoice) {
+      if (invoice.presentation.isPaid) return 3;
+      if (invoice.presentation.isClosed) return 1;
+      return 2;
+    }
+
     return [...displayInvoices].sort((a, b) => {
-      if (a.status !== b.status) {
-        return a.status === "OPEN" ? -1 : 1;
+      const priorityA = getInvoicePriority(a);
+      const priorityB = getInvoicePriority(b);
+
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
       }
 
       const aDue =
@@ -423,9 +728,118 @@ export default function InvoicesPage() {
       const bDue =
         parseLocalDate(b.dueDate)?.getTime() ??
         new Date(b.year, b.month - 1, 1).getTime();
+
       return aDue - bDue;
     });
   }, [displayInvoices]);
+
+
+  const futureInvoicesProjectionSection =
+    futureInvoicesProjection.length > 0 ? (
+          <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+                  Planejamento do cartão
+                </p>
+                <h2 className="mt-1 text-lg font-bold text-slate-950">
+                  Faturas futuras previstas
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Compras e parcelas que já estão comprometendo os próximos meses.
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-rose-50 px-4 py-3 text-right">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-rose-500">
+                  Total futuro
+                </p>
+                <p className="mt-1 text-lg font-bold text-rose-600">
+                  {formatCurrency(futureInvoicesTotal)}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {futureInvoicesProjection.map((item) => {
+                const isProjectionExpanded = Boolean(expandedFutureProjectionIds[item.id]);
+                const visibleGroups = isProjectionExpanded ? item.groups : item.groups.slice(0, 3);
+                const hiddenGroupsCount = Math.max(item.groups.length - visibleGroups.length, 0);
+
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-slate-100 bg-slate-50 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-900">
+                          {item.label}
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {item.cardName} · {item.groups.length} compra(s) · {item.transactionCount} lançamento(s)
+                        </p>
+                      </div>
+
+                      <p className="shrink-0 text-base font-bold text-rose-600">
+                        {formatCurrency(item.total)}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => toggleFutureProjectionExpanded(item.id)}
+                      className="mt-3 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:bg-slate-50"
+                    >
+                      <span>
+                        <span className="block text-xs font-bold text-slate-800">
+                          {isProjectionExpanded ? "Ocultar descrição" : "Ver descrição dos produtos"}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] text-slate-500">
+                          {isProjectionExpanded
+                            ? `${item.groups.length} compra(s) aberta(s)`
+                            : hiddenGroupsCount > 0
+                            ? `Mostrando 3 de ${item.groups.length} compra(s)`
+                            : `${item.groups.length} compra(s) neste mês`}
+                        </span>
+                      </span>
+                      <span className="ml-3 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                        {isProjectionExpanded ? "−" : "+"}
+                      </span>
+                    </button>
+
+                    {isProjectionExpanded && (
+                      <div className="mt-3 space-y-2">
+                        {visibleGroups.map((group) => (
+                          <div
+                            key={group.id}
+                            className="flex items-start justify-between gap-3 rounded-xl bg-white px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-semibold text-slate-800">
+                                {group.title}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-slate-500">
+                                {getCategoryLabel(group.category)} · {formatDateBR(group.firstDate)}
+                                {group.isInstallment && group.installmentCount > 1
+                                  ? ` · ${group.installmentCount}x de ${formatCurrency(group.installmentAmount)}`
+                                  : ""}
+                              </p>
+                            </div>
+
+                            <p className="shrink-0 text-xs font-bold text-rose-600">
+                              {formatCurrency(group.totalAmount)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+    ) : null;
 
   return (
     <main className="min-h-screen bg-slate-50 px-3 py-4 md:px-8 md:py-8">
@@ -485,9 +899,13 @@ export default function InvoicesPage() {
             </div>
             <div className="rounded-2xl bg-slate-50 p-3">
               <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                Disponível
+                Disponível consciente
               </p>
-              <p className="mt-1 text-sm font-bold text-emerald-600 md:text-base">
+              <p
+                className={`mt-1 text-sm font-bold md:text-base ${
+                  totalAvailableLimit >= 0 ? "text-emerald-600" : "text-rose-600"
+                }`}
+              >
                 {formatCurrency(totalAvailableLimit)}
               </p>
             </div>
@@ -504,7 +922,7 @@ export default function InvoicesPage() {
           </div>
         ) : (
           <section className="space-y-4">
-            {invoicesOrdered.map((invoice) => {
+            {invoicesOrdered.map((invoice, invoiceIndex) => {
               const details = invoice.displayDetails;
               const presentation = invoice.presentation;
               const cardName =
@@ -517,8 +935,8 @@ export default function InvoicesPage() {
               const isExpanded = Boolean(expandedInvoiceIds[invoice.id]);
 
               return (
+                <Fragment key={invoice.id}>
                 <article
-                  key={invoice.id}
                   className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-sm"
                 >
                   <div className="p-4 md:p-5">
@@ -597,78 +1015,9 @@ export default function InvoicesPage() {
 
                   <div className="p-4 md:p-5">
                     {presentation.isClosed ? (
-                      <>
-                        <div className="mb-3 flex items-center gap-3">
-                          <h3 className="shrink-0 text-sm font-semibold text-slate-800">
-                            Próximos lançamentos
-                          </h3>
-                          <div className="h-px flex-1 bg-slate-200" />
-                          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                            {details.futureTransactions.length} item(ns)
-                          </span>
-                        </div>
-
-                        {details.futureTransactions.length > 0 ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => toggleInvoiceExpanded(invoice.id)}
-                              className="mb-3 flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:bg-slate-50"
-                            >
-                              <span>
-                                <span className="block text-sm font-semibold text-slate-900">
-                                  {isExpanded
-                                    ? "Ocultar próximos lançamentos"
-                                    : "Ver próximos lançamentos"}
-                                </span>
-                                <span className="mt-0.5 block text-xs text-slate-500">
-                                  Compras feitas depois do fechamento desta
-                                  fatura.
-                                </span>
-                              </span>
-                              <span className="ml-3 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                                {isExpanded ? "−" : "+"}
-                              </span>
-                            </button>
-
-                            {isExpanded && (
-                              <div className="space-y-2">
-                                {details.futureTransactions.map(
-                                  (transaction) => (
-                                    <div
-                                      key={transaction.id}
-                                      className="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2.5"
-                                    >
-                                      <div className="flex items-center justify-between gap-3">
-                                        <div className="min-w-0">
-                                          <p className="truncate text-sm font-semibold text-slate-900">
-                                            {transaction.title}
-                                          </p>
-                                          <p className="mt-0.5 text-xs text-amber-800">
-                                            {getInvoiceTransactionCategoryLabel(
-                                              transaction,
-                                            )}{" "}
-                                            · {formatDateBR(transaction.date)}
-                                          </p>
-                                        </div>
-                                        <p className="shrink-0 text-sm font-semibold text-rose-600">
-                                          {formatCurrency(
-                                            Number(transaction.amount),
-                                          )}
-                                        </p>
-                                      </div>
-                                    </div>
-                                  ),
-                                )}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-center text-sm text-slate-500">
-                            Nenhum lançamento novo depois do fechamento.
-                          </div>
-                        )}
-                      </>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-center text-sm text-slate-500">
+                        Compras feitas após o fechamento já aparecem no planejamento das próximas faturas.
+                      </div>
                     ) : (
                       <>
                         <div className="mb-3 flex items-center gap-3">
@@ -759,10 +1108,14 @@ export default function InvoicesPage() {
                     )}
                   </div>
                 </article>
+                {invoiceIndex === 0 && futureInvoicesProjectionSection}
+                </Fragment>
               );
             })}
           </section>
         )}
+
+
       </div>
     </main>
   );

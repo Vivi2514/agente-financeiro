@@ -49,6 +49,66 @@ function formatCurrency(value: number) {
   });
 }
 
+function getCurrentMonthProgress() {
+  const now = new Date();
+  const totalDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const elapsedDays = Math.min(now.getDate(), totalDays);
+  const remainingDays = Math.max(totalDays - elapsedDays, 0);
+  const elapsedPercent = totalDays > 0 ? (elapsedDays / totalDays) * 100 : 0;
+
+  return {
+    totalDays,
+    elapsedDays,
+    remainingDays,
+    elapsedPercent,
+  };
+}
+
+function getPaceStatus(usagePercent: number | null, elapsedPercent: number) {
+  if (usagePercent === null) {
+    return {
+      label: "Sem ritmo definido",
+      badge: "app-badge-neutral",
+      textClass: "text-slate-500",
+      message: "Defina um limite mensal consciente para acompanhar o ritmo de uso.",
+    };
+  }
+
+  if (usagePercent >= 100) {
+    return {
+      label: "Estourado",
+      badge: "app-badge-danger",
+      textClass: "text-rose-700",
+      message: "Você já passou do limite mensal consciente. O ideal agora é pausar o crédito.",
+    };
+  }
+
+  if (usagePercent > elapsedPercent + 15) {
+    return {
+      label: "Uso acelerado",
+      badge: "app-badge-danger",
+      textClass: "text-rose-700",
+      message: "O cartão está sendo usado mais rápido do que o ritmo do mês permite.",
+    };
+  }
+
+  if (usagePercent > elapsedPercent + 5) {
+    return {
+      label: "Atenção ao ritmo",
+      badge: "app-badge-warning",
+      textClass: "text-amber-700",
+      message: "Você está um pouco acima do ritmo ideal. Vale segurar novas compras.",
+    };
+  }
+
+  return {
+    label: "Dentro do ritmo",
+    badge: "app-badge-success",
+    textClass: "text-emerald-700",
+    message: "Seu uso está compatível com o andamento do mês.",
+  };
+}
+
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
@@ -70,6 +130,7 @@ export default function AccountsPage() {
   const [savingCard, setSavingCard] = useState(false);
   const [savingMonthlyLimitCardId, setSavingMonthlyLimitCardId] = useState<string | null>(null);
   const [monthlyLimitInputs, setMonthlyLimitInputs] = useState<Record<string, string>>({});
+  const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
 
   async function loadData() {
     try {
@@ -269,6 +330,13 @@ export default function AccountsPage() {
     return transaction.date || transaction.createdAt || "";
   }
 
+  function toggleCardExpanded(cardId: string) {
+    setExpandedCardIds((current) => ({
+      ...current,
+      [cardId]: !current[cardId],
+    }));
+  }
+
   async function saveMonthlyLimit(cardId: string) {
     const rawValue = monthlyLimitInputs[cardId] || "";
     const monthlyLimit = rawValue.trim()
@@ -317,6 +385,7 @@ export default function AccountsPage() {
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
+    const monthProgress = getCurrentMonthProgress();
 
     return cards.map((card) => {
       const openInvoices = invoices.filter(
@@ -352,6 +421,17 @@ export default function AccountsPage() {
       const monthlyAvailable = monthlyLimit > 0 ? monthlyLimit - monthlyUsed : 0;
       const monthlyUsagePercent =
         monthlyLimit > 0 ? (monthlyUsed / monthlyLimit) * 100 : null;
+      const expectedMonthlyUseByToday =
+        monthlyLimit > 0 ? monthlyLimit * (monthProgress.elapsedPercent / 100) : 0;
+      const paceDifference = monthlyUsed - expectedMonthlyUseByToday;
+      const dailyAvailableForRestOfMonth =
+        monthlyLimit > 0 && monthProgress.remainingDays > 0
+          ? Math.max(monthlyAvailable, 0) / monthProgress.remainingDays
+          : 0;
+      const paceStatus = getPaceStatus(
+        monthlyUsagePercent,
+        monthProgress.elapsedPercent,
+      );
 
       return {
         ...card,
@@ -362,6 +442,14 @@ export default function AccountsPage() {
         monthlyLimit,
         monthlyAvailable,
         monthlyUsagePercent,
+        monthElapsedPercent: monthProgress.elapsedPercent,
+        elapsedDays: monthProgress.elapsedDays,
+        totalDays: monthProgress.totalDays,
+        remainingDays: monthProgress.remainingDays,
+        expectedMonthlyUseByToday,
+        paceDifference,
+        dailyAvailableForRestOfMonth,
+        paceStatus,
         openInvoicesCount: openInvoices.length,
       };
     });
@@ -519,193 +607,331 @@ export default function AccountsPage() {
                       card.monthlyUsagePercent === null
                         ? "0%"
                         : `${Math.min(card.monthlyUsagePercent, 100)}%`;
+                    const bankProgressClass = isDanger
+                      ? "app-progress-danger"
+                      : isWarning
+                      ? "app-progress-warning"
+                      : "app-progress-success";
+                    const isExpanded = Boolean(expandedCardIds[card.id]);
+                    const compactUsageLabel = card.monthlyLimit > 0
+                      ? `${formatCurrency(card.monthlyUsed)} de ${formatCurrency(card.monthlyLimit)}`
+                      : `${formatCurrency(card.used)} usado`;
+                    const compactPercent = card.monthlyUsagePercent !== null
+                      ? card.monthlyUsagePercent
+                      : card.usagePercent;
 
                     return (
                       <div
                         key={card.id}
                         className="app-card-soft border border-slate-100 p-4"
                       >
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <p className="font-semibold text-slate-900">
-                              {card.name}
-                            </p>
-                            <p className="text-sm text-slate-500">
-                              Fecha dia {card.closingDay} • Vence dia {card.dueDay}
-                            </p>
-                          </div>
-
-                          <span
-                            className={
-                              isDanger
-                                ? "app-badge-danger"
-                                : isWarning
-                                ? "app-badge-warning"
-                                : "app-badge-success"
-                            }
-                          >
-                            {card.usagePercent.toFixed(0)}% usado
-                          </span>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                          <div className="rounded-xl bg-white p-3 border border-slate-100">
-                            <p className="text-xs text-slate-500">Limite total</p>
-                            <p className="mt-1 font-bold text-slate-900">
-                              {formatCurrency(card.limit)}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-white p-3 border border-slate-100">
-                            <p className="text-xs text-slate-500">Usado</p>
-                            <p className="mt-1 app-value-negative">
-                              {formatCurrency(card.used)}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-white p-3 border border-slate-100">
-                            <p className="text-xs text-slate-500">Disponível</p>
-                            <p
-                              className={
-                                card.available >= 0
-                                  ? "mt-1 app-value-positive"
-                                  : "mt-1 app-value-negative"
-                              }
-                            >
-                              {formatCurrency(card.available)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="mt-4">
-                          <div className="app-progress-bg">
-                            <div
-                              className={
-                                isDanger
-                                  ? "app-progress-danger"
-                                  : isWarning
-                                  ? "app-progress-warning"
-                                  : "app-progress-success"
-                              }
-                              style={{
-                                width: `${Math.min(card.usagePercent, 100)}%`,
-                              }}
-                            />
-                          </div>
-
-                          <p className="mt-2 text-xs text-slate-500">
-                            {card.openInvoicesCount} fatura(s) aberta(s) neste cartão
-                          </p>
-                        </div>
-
-                        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
-                              <p className="text-sm font-bold text-slate-900">
-                                Limite mensal consciente
+                        <button
+                          type="button"
+                          onClick={() => toggleCardExpanded(card.id)}
+                          className="w-full text-left"
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-900">
+                                {card.name}
                               </p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                Controle quanto você decidiu usar neste mês, independente do limite do banco.
+                              <p className="mt-0.5 text-xs text-slate-500">
+                                Fecha dia {card.closingDay} • Vence dia {card.dueDay}
                               </p>
                             </div>
 
-                            <span className={monthlyStatus.badge}>
-                              {monthlyStatus.label}
-                            </span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className={card.paceStatus.badge}>
+                                {card.paceStatus.label}
+                              </span>
+                              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                                {isExpanded ? "−" : "+"}
+                              </span>
+                            </div>
                           </div>
 
-                          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                              <p className="text-xs text-slate-500">Limite mensal</p>
-                              <p className="mt-1 font-bold text-slate-900">
-                                {card.monthlyLimit > 0
-                                  ? formatCurrency(card.monthlyLimit)
-                                  : "Não definido"}
+                          <div className="mt-4 grid grid-cols-3 gap-2">
+                            <div className="rounded-xl border border-slate-100 bg-white p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                                Uso mensal
+                              </p>
+                              <p className="mt-1 text-xs font-bold text-slate-900 sm:text-sm">
+                                {compactUsageLabel}
                               </p>
                             </div>
 
-                            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                              <p className="text-xs text-slate-500">Usado no mês</p>
-                              <p className="mt-1 app-value-negative">
-                                {formatCurrency(card.monthlyUsed)}
+                            <div className="rounded-xl border border-slate-100 bg-white p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                                Sobra
                               </p>
-                            </div>
-
-                            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                              <p className="text-xs text-slate-500">Sobra planejada</p>
                               <p
                                 className={
                                   card.monthlyLimit <= 0
-                                    ? "mt-1 app-value-neutral"
+                                    ? "mt-1 text-xs font-bold text-slate-900 sm:text-sm"
                                     : card.monthlyAvailable >= 0
-                                    ? "mt-1 app-value-positive"
-                                    : "mt-1 app-value-negative"
+                                    ? "mt-1 text-xs font-bold text-emerald-600 sm:text-sm"
+                                    : "mt-1 text-xs font-bold text-rose-600 sm:text-sm"
                                 }
                               >
                                 {card.monthlyLimit > 0
                                   ? formatCurrency(card.monthlyAvailable)
-                                  : "-"}
+                                  : formatCurrency(card.available)}
+                              </p>
+                            </div>
+
+                            <div className="rounded-xl border border-slate-100 bg-white p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                                Percentual
+                              </p>
+                              <p
+                                className={
+                                  compactPercent >= 90
+                                    ? "mt-1 text-xs font-bold text-rose-600 sm:text-sm"
+                                    : compactPercent >= 70
+                                    ? "mt-1 text-xs font-bold text-amber-600 sm:text-sm"
+                                    : "mt-1 text-xs font-bold text-emerald-600 sm:text-sm"
+                                }
+                              >
+                                {compactPercent.toFixed(0)}%
                               </p>
                             </div>
                           </div>
 
-                          {card.monthlyLimit > 0 && (
-                            <div className="mt-4">
-                              <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-                                <span>Uso do limite mensal</span>
-                                <span>{card.monthlyUsagePercent?.toFixed(0)}%</span>
-                              </div>
-                              <div className="app-progress-bg">
-                                <div
-                                  className={monthlyStatus.progress}
-                                  style={{ width: monthlyProgressWidth }}
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          <p
-                            className={`mt-3 text-sm ${
-                              card.monthlyUsagePercent !== null && card.monthlyUsagePercent >= 90
-                                ? "text-rose-700"
-                                : card.monthlyUsagePercent !== null && card.monthlyUsagePercent >= 70
-                                ? "text-amber-700"
-                                : "text-slate-500"
-                            }`}
-                          >
-                            {monthlyStatus.message}
-                          </p>
-
-                          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Ajustar limite mensal
-                              </label>
-                              <input
-                                placeholder="Ex: 800"
-                                value={monthlyLimitInputs[card.id] || ""}
-                                onChange={(e) =>
-                                  setMonthlyLimitInputs((current) => ({
-                                    ...current,
-                                    [card.id]: e.target.value,
-                                  }))
-                                }
-                                className="app-input"
+                          <div className="mt-3">
+                            <div className="app-progress-bg">
+                              <div
+                                className={card.monthlyLimit > 0 ? monthlyStatus.progress : bankProgressClass}
+                                style={{ width: `${Math.min(compactPercent, 100)}%` }}
                               />
                             </div>
-
-                            <button
-                              type="button"
-                              onClick={() => saveMonthlyLimit(card.id)}
-                              disabled={savingMonthlyLimitCardId === card.id}
-                              className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {savingMonthlyLimitCardId === card.id
-                                ? "Salvando..."
-                                : "Salvar limite"}
-                            </button>
+                            <p className={`mt-2 text-xs ${card.paceStatus.textClass}`}>
+                              {card.paceStatus.message}
+                            </p>
                           </div>
-                        </div>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                              <div className="rounded-xl bg-white p-3 border border-slate-100">
+                                <p className="text-xs text-slate-500">Limite total</p>
+                                <p className="mt-1 font-bold text-slate-900">
+                                  {formatCurrency(card.limit)}
+                                </p>
+                              </div>
+
+                              <div className="rounded-xl bg-white p-3 border border-slate-100">
+                                <p className="text-xs text-slate-500">Usado em faturas abertas</p>
+                                <p className="mt-1 app-value-negative">
+                                  {formatCurrency(card.used)}
+                                </p>
+                              </div>
+
+                              <div className="rounded-xl bg-white p-3 border border-slate-100">
+                                <p className="text-xs text-slate-500">Disponível banco</p>
+                                <p
+                                  className={
+                                    card.available >= 0
+                                      ? "mt-1 app-value-positive"
+                                      : "mt-1 app-value-negative"
+                                  }
+                                >
+                                  {formatCurrency(card.available)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="app-progress-bg">
+                                <div
+                                  className={bankProgressClass}
+                                  style={{ width: `${Math.min(card.usagePercent, 100)}%` }}
+                                />
+                              </div>
+                              <p className="mt-2 text-xs text-slate-500">
+                                {card.openInvoicesCount} fatura(s) aberta(s) neste cartão · {card.usagePercent.toFixed(0)}% do limite do banco
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                  <p className="text-sm font-bold text-slate-900">
+                                    Limite mensal consciente
+                                  </p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Controle quanto você decidiu usar neste mês, independente do limite do banco.
+                                  </p>
+                                </div>
+
+                                <span className={monthlyStatus.badge}>
+                                  {monthlyStatus.label}
+                                </span>
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                                  <p className="text-xs text-slate-500">Limite mensal</p>
+                                  <p className="mt-1 font-bold text-slate-900">
+                                    {card.monthlyLimit > 0
+                                      ? formatCurrency(card.monthlyLimit)
+                                      : "Não definido"}
+                                  </p>
+                                </div>
+
+                                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                                  <p className="text-xs text-slate-500">Usado no mês</p>
+                                  <p className="mt-1 app-value-negative">
+                                    {formatCurrency(card.monthlyUsed)}
+                                  </p>
+                                </div>
+
+                                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                                  <p className="text-xs text-slate-500">Sobra planejada</p>
+                                  <p
+                                    className={
+                                      card.monthlyLimit <= 0
+                                        ? "mt-1 app-value-neutral"
+                                        : card.monthlyAvailable >= 0
+                                        ? "mt-1 app-value-positive"
+                                        : "mt-1 app-value-negative"
+                                    }
+                                  >
+                                    {card.monthlyLimit > 0
+                                      ? formatCurrency(card.monthlyAvailable)
+                                      : "-"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {card.monthlyLimit > 0 && (
+                                <div className="mt-4">
+                                  <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                                    <span>Uso do limite mensal</span>
+                                    <span>{card.monthlyUsagePercent?.toFixed(0)}%</span>
+                                  </div>
+                                  <div className="app-progress-bg">
+                                    <div
+                                      className={monthlyStatus.progress}
+                                      style={{ width: monthlyProgressWidth }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {card.monthlyLimit > 0 && (
+                                <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                      <p className="text-sm font-bold text-slate-900">
+                                        Ritmo de uso do mês
+                                      </p>
+                                      <p className="mt-1 text-xs text-slate-500">
+                                        Dia {card.elapsedDays} de {card.totalDays} · ritmo ideal até hoje: {card.monthElapsedPercent.toFixed(0)}%
+                                      </p>
+                                    </div>
+
+                                    <span className={card.paceStatus.badge}>
+                                      {card.paceStatus.label}
+                                    </span>
+                                  </div>
+
+                                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                    <div className="rounded-xl border border-slate-100 bg-white p-3">
+                                      <p className="text-xs text-slate-500">Uso ideal até hoje</p>
+                                      <p className="mt-1 font-bold text-slate-900">
+                                        {formatCurrency(card.expectedMonthlyUseByToday)}
+                                      </p>
+                                    </div>
+
+                                    <div className="rounded-xl border border-slate-100 bg-white p-3">
+                                      <p className="text-xs text-slate-500">Diferença do ritmo</p>
+                                      <p
+                                        className={
+                                          card.paceDifference <= 0
+                                            ? "mt-1 app-value-positive"
+                                            : "mt-1 app-value-negative"
+                                        }
+                                      >
+                                        {card.paceDifference <= 0
+                                          ? `${formatCurrency(Math.abs(card.paceDifference))} abaixo`
+                                          : `${formatCurrency(card.paceDifference)} acima`}
+                                      </p>
+                                    </div>
+
+                                    <div className="rounded-xl border border-slate-100 bg-white p-3">
+                                      <p className="text-xs text-slate-500">Seguro por dia</p>
+                                      <p className="mt-1 font-bold text-slate-900">
+                                        {card.remainingDays > 0
+                                          ? formatCurrency(card.dailyAvailableForRestOfMonth)
+                                          : "Mês encerrando"}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-4">
+                                    <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                                      <span>Ritmo esperado</span>
+                                      <span>{card.monthElapsedPercent.toFixed(0)}%</span>
+                                    </div>
+                                    <div className="app-progress-bg">
+                                      <div
+                                        className="app-progress-success"
+                                        style={{ width: `${Math.min(card.monthElapsedPercent, 100)}%` }}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <p className={`mt-3 text-sm ${card.paceStatus.textClass}`}>
+                                    {card.paceStatus.message}
+                                  </p>
+                                </div>
+                              )}
+
+                              <p
+                                className={`mt-3 text-sm ${
+                                  card.monthlyUsagePercent !== null && card.monthlyUsagePercent >= 90
+                                    ? "text-rose-700"
+                                    : card.monthlyUsagePercent !== null && card.monthlyUsagePercent >= 70
+                                    ? "text-amber-700"
+                                    : "text-slate-500"
+                                }`}
+                              >
+                                {monthlyStatus.message}
+                              </p>
+
+                              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                                <div>
+                                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Ajustar limite mensal
+                                  </label>
+                                  <input
+                                    placeholder="Ex: 800"
+                                    value={monthlyLimitInputs[card.id] || ""}
+                                    onChange={(e) =>
+                                      setMonthlyLimitInputs((current) => ({
+                                        ...current,
+                                        [card.id]: e.target.value,
+                                      }))
+                                    }
+                                    className="app-input"
+                                  />
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => saveMonthlyLimit(card.id)}
+                                  disabled={savingMonthlyLimitCardId === card.id}
+                                  className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {savingMonthlyLimitCardId === card.id
+                                    ? "Salvando..."
+                                    : "Salvar limite"}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
