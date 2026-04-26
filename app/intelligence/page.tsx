@@ -43,6 +43,7 @@ type Card = {
   id: string;
   name: string;
   limit?: number;
+  monthlyLimit?: number | null;
   brand?: string | null;
 };
 
@@ -69,6 +70,7 @@ type Invoice = {
   status: "OPEN" | "PAID";
   paidAt?: string | null;
   paidFromAccountId?: string | null;
+  dueDate?: string | null;
   card?: {
     id: string;
     name: string;
@@ -109,6 +111,25 @@ function getMonthInputValue(date: Date) {
 function parseMonthInput(value: string) {
   const [year, month] = value.split("-").map(Number);
   return { year, month };
+}
+
+function parseDateOnly(dateValue?: string | null) {
+  if (!dateValue) return null;
+
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function isInvoiceInMonth(invoice: Invoice, year: number, month: number) {
+  const dueDate = parseDateOnly(invoice.dueDate);
+
+  if (dueDate) {
+    return dueDate.getFullYear() === year && dueDate.getMonth() + 1 === month;
+  }
+
+  return invoice.year === year && invoice.month === month;
 }
 
 function formatMonthYear(date: Date) {
@@ -372,10 +393,8 @@ export default function IntelligencePage() {
   }, [openInvoices]);
 
   const selectedMonthOpenInvoices = useMemo(() => {
-    return openInvoices.filter(
-      (invoice) =>
-        invoice.year === selectedMonthMeta.year &&
-        invoice.month === selectedMonthMeta.month
+    return openInvoices.filter((invoice) =>
+      isInvoiceInMonth(invoice, selectedMonthMeta.year, selectedMonthMeta.month)
     );
   }, [openInvoices, selectedMonthMeta.month, selectedMonthMeta.year]);
 
@@ -496,12 +515,12 @@ export default function IntelligencePage() {
   }, [futureInstallments]);
 
   const projectedBalanceAfterInvoices = useMemo(() => {
-    return currentAccountsBalance - openInvoicesTotal;
-  }, [currentAccountsBalance, openInvoicesTotal]);
+    return currentAccountsBalance - selectedMonthOpenInvoicesTotal;
+  }, [currentAccountsBalance, selectedMonthOpenInvoicesTotal]);
 
   const projectedBalanceReal = useMemo(() => {
-    return currentAccountsBalance - openInvoicesTotal - futureInstallmentsTotal;
-  }, [currentAccountsBalance, openInvoicesTotal, futureInstallmentsTotal]);
+    return currentAccountsBalance - selectedMonthOpenInvoicesTotal - futureInstallmentsTotal;
+  }, [currentAccountsBalance, selectedMonthOpenInvoicesTotal, futureInstallmentsTotal]);
 
   const futureInstallmentsByMonth = useMemo(() => {
     const grouped = futureInstallments.reduce<
@@ -1006,313 +1025,317 @@ export default function IntelligencePage() {
     totalIncomes,
   ]);
 
+  const monthlyConsciousLimitSummary = useMemo(() => {
+    const totalMonthlyLimit = cards.reduce(
+      (sum, card) => sum + Math.max(0, Number(card.monthlyLimit || 0)),
+      0
+    );
+
+    const usedInSelectedMonth = analyticalTransactions
+      .filter((transaction) => {
+        if (!transaction.cardId) return false;
+        if (transaction.paymentMethod !== "credit_card") return false;
+        if (!isExpenseType(transaction.type)) return false;
+        if (isAdjustmentTransaction(transaction)) return false;
+
+        const card = cards.find((item) => item.id === transaction.cardId);
+        return Number(card?.monthlyLimit || 0) > 0;
+      })
+      .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+
+    const available = totalMonthlyLimit - usedInSelectedMonth;
+    const usagePercent =
+      totalMonthlyLimit > 0 ? (usedInSelectedMonth / totalMonthlyLimit) * 100 : 0;
+
+    return {
+      totalMonthlyLimit,
+      usedInSelectedMonth,
+      available,
+      usagePercent,
+      hasMonthlyLimit: totalMonthlyLimit > 0,
+    };
+  }, [analyticalTransactions, cards]);
+
+  const monthlyDecisionAvailable = monthlyConsciousLimitSummary.available;
+  const monthlyDecisionUsagePercent = monthlyConsciousLimitSummary.usagePercent;
+
+  const selectedMonthInvoicesPressure =
+    selectedMonthOpenInvoicesTotal > 0 &&
+    selectedMonthOpenInvoicesTotal >= Math.max(currentAccountsBalance, 0);
+
+  const hasOpenInvoicesInSelectedMonth = selectedMonthOpenInvoicesTotal > 0;
+
+  const canBuyTone = !monthlyConsciousLimitSummary.hasMonthlyLimit
+    ? selectedMonthInvoicesPressure || projectedBalanceReal < 0
+      ? "danger"
+      : hasOpenInvoicesInSelectedMonth
+      ? "warning"
+      : "success"
+    : monthlyDecisionAvailable <= 0 ||
+      monthlyDecisionUsagePercent >= 100 ||
+      selectedMonthInvoicesPressure
+    ? "danger"
+    : monthlyDecisionUsagePercent >= 85 || hasOpenInvoicesInSelectedMonth
+    ? "warning"
+    : "success";
+
+  const canBuyTitle =
+    canBuyTone === "danger"
+      ? "Melhor segurar o crédito agora."
+      : canBuyTone === "warning"
+      ? "Atenção antes de comprar."
+      : "Você ainda tem margem para decidir.";
+
+  const canBuySubtitle = !monthlyConsciousLimitSummary.hasMonthlyLimit
+    ? "Você ainda não definiu limite mensal consciente para os cartões. A leitura considera faturas e saldo, mas fica mais precisa com esse limite."
+    : selectedMonthInvoicesPressure
+    ? "Mesmo com margem consciente, este mês tem faturas abertas pesando no seu saldo. Antes de comprar, revise o pagamento dessas faturas."
+    : hasOpenInvoicesInSelectedMonth
+    ? "Você ainda tem margem consciente, mas existem faturas abertas neste mês. O ideal é simular antes de confirmar qualquer compra."
+    : canBuyTone === "danger"
+    ? "Seu limite mensal consciente já está estourado ou praticamente sem folga. Antes de comprar, revise cartões e faturas."
+    : canBuyTone === "warning"
+    ? "Você ainda tem alguma margem consciente, mas ela está curta. Vale simular antes de confirmar qualquer compra."
+    : "Pelo limite mensal consciente, ainda existe espaço. Mesmo assim, compras maiores devem passar pela simulação.";
+
+  const decisionReasons = [
+    {
+      id: "monthly-conscious-limit",
+      label: "Margem consciente",
+      value: monthlyConsciousLimitSummary.hasMonthlyLimit
+        ? formatCurrency(monthlyDecisionAvailable)
+        : "Não definida",
+      danger:
+        monthlyConsciousLimitSummary.hasMonthlyLimit &&
+        monthlyDecisionAvailable <= 0,
+      helper: monthlyConsciousLimitSummary.hasMonthlyLimit
+        ? `Você já usou ${Math.round(monthlyDecisionUsagePercent)}% do limite mensal planejado.`
+        : "Defina limite mensal nos cartões para esta leitura ficar mais fiel.",
+    },
+    {
+      id: "open-invoices",
+      label: "Faturas do mês",
+      value: formatCurrency(selectedMonthOpenInvoicesTotal),
+      danger: selectedMonthInvoicesPressure,
+      helper:
+        selectedMonthOpenInvoicesTotal > 0
+          ? "Elas pesam no mês selecionado e precisam ser prioridade antes de novas compras."
+          : "Sem faturas abertas neste mês.",
+    },
+    {
+      id: "current-balance",
+      label: "Contas agora",
+      value: formatCurrency(currentAccountsBalance),
+      danger: currentAccountsBalance <= 0,
+      helper:
+        currentAccountsBalance <= 0
+          ? "Saldo disponível está apertado."
+          : "Saldo atual considerado.",
+    },
+  ];
+
+  const decisionSummary =
+    !monthlyConsciousLimitSummary.hasMonthlyLimit
+      ? "A decisão mais segura é definir um limite mensal consciente nos cartões e simular compras antes de usar crédito."
+      : selectedMonthInvoicesPressure
+      ? "A decisão mais segura é pagar ou revisar as faturas do mês antes de assumir novas compras no crédito."
+      : hasOpenInvoicesInSelectedMonth
+      ? "A decisão mais segura é simular antes de comprar, porque este mês ainda tem faturas abertas."
+      : canBuyTone === "danger"
+      ? "A decisão mais segura é não assumir novas compras no crédito até recuperar margem consciente."
+      : canBuyTone === "warning"
+      ? "A decisão mais segura é simular a compra antes de confirmar e evitar parcelamento novo."
+      : "A decisão mais segura é manter o controle, comprar só o necessário e seguir registrando os gastos.";
+
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6">
-      <div className="mx-auto max-w-4xl space-y-6">
-        <header className="rounded-3xl bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <main className="min-h-screen bg-slate-950 px-4 py-5 text-white">
+      <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] w-full max-w-xl flex-col gap-4">
+        <header className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl shadow-slate-950/40">
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-sm font-medium text-slate-500">Leitura inteligente</p>
-              <h1 className="text-3xl font-bold text-slate-900">
+              <p className="text-[11px] font-black uppercase tracking-[0.24em] text-slate-500">
                 Inteligência financeira
+              </p>
+              <h1 className="mt-2 text-2xl font-black leading-tight text-white">
+                Posso comprar no crédito agora?
               </h1>
-              <p className="mt-1 text-sm text-slate-500">
-                Veja riscos, próximos impactos e o que vale fazer agora.
+              <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                Uma resposta direta baseada no seu limite mensal consciente.
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 sm:items-end">
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  href="/"
-                  className="text-sm font-medium text-slate-600 transition hover:text-slate-900"
-                >
-                  Voltar
-                </Link>
+            <Link
+              href="/"
+              className="shrink-0 rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-slate-300 transition hover:bg-white/10"
+            >
+              Voltar
+            </Link>
+          </div>
 
-                <Link
-                  href="/simular-compra"
-                  className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Simular compra
-                </Link>
-
-                <Link
-                  href="/simulation-history"
-                  className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Ver histórico
-                </Link>
-              </div>
-
-              <label className="text-sm font-medium text-slate-700">
-                Mês
-              </label>
-              <input
-                type="month"
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-slate-400"
-              />
-            </div>
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-bold text-white outline-none transition focus:border-sky-400"
+            />
           </div>
         </header>
 
         {loading ? (
-          <div className="rounded-3xl bg-white p-10 text-center text-slate-500 shadow-sm">
-            Carregando inteligência financeira...
-          </div>
+          <section className="flex flex-1 items-center justify-center rounded-[2rem] border border-white/10 bg-white/[0.04] p-10 text-center text-slate-400">
+            Carregando sua leitura financeira...
+          </section>
         ) : (
           <>
-            <section className={`rounded-3xl border p-5 shadow-sm ${getAlertStyles(assistantSummary.tone).container}`}>
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    {assistantSummary.eyebrow}
-                  </p>
-                  <h2 className={`mt-2 text-xl font-bold ${getAlertStyles(assistantSummary.tone).title}`}>
-                    {assistantSummary.title}
-                  </h2>
-                  <p className={`mt-2 text-sm ${getAlertStyles(assistantSummary.tone).text}`}>
-                    {assistantSummary.action}
-                  </p>
-                  <p className={`mt-1 text-sm ${getAlertStyles(assistantSummary.tone).text}`}>
-                    {assistantSummary.impact}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/60 bg-white/60 p-4 lg:min-w-[280px]">
-                  <p className="text-sm font-semibold text-slate-900">Checklist do dia</p>
-                  <div className="mt-3 space-y-2">
-                    {assistantChecklist.map((item) => (
-                      <div key={item.id} className="flex items-start gap-2">
-                        <span
-                          className={`mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold ${
-                            item.done
-                              ? "bg-emerald-100 text-emerald-700"
-                              : "bg-slate-200 text-slate-500"
-                          }`}
-                        >
-                          {item.done ? "✓" : "•"}
-                        </span>
-                        <p className={`text-sm ${item.done ? "text-slate-700" : "text-slate-600"}`}>
-                          {item.label}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className={`rounded-3xl border p-5 shadow-sm ${getAlertStyles(primaryStatus.tone).container}`}>
-              <p className={`text-sm font-semibold ${getAlertStyles(primaryStatus.tone).title}`}>
-                {primaryStatus.title}
+            <section
+              className={`rounded-[2.25rem] border p-6 shadow-2xl shadow-slate-950/40 ${
+                canBuyTone === "danger"
+                  ? "border-rose-400/30 bg-rose-500/10"
+                  : canBuyTone === "warning"
+                  ? "border-amber-400/30 bg-amber-500/10"
+                  : "border-emerald-400/30 bg-emerald-500/10"
+              }`}
+            >
+              <p
+                className={`text-xs font-black uppercase tracking-[0.22em] ${
+                  canBuyTone === "danger"
+                    ? "text-rose-300"
+                    : canBuyTone === "warning"
+                    ? "text-amber-300"
+                    : "text-emerald-300"
+                }`}
+              >
+                Leitura do crédito
               </p>
-              <p className={`mt-1 text-sm ${getAlertStyles(primaryStatus.tone).text}`}>
-                {primaryStatus.message}
-              </p>
-            </section>
 
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm font-semibold text-slate-900">
-                O que fazer agora
-              </p>
-              <p className="mt-2 text-sm text-slate-600">{nextAction}</p>
-            </section>
-
-            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-3xl bg-white p-5 shadow-sm">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Contas agora
-                </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {formatCurrency(quickReading.accountsBalance)}
-                </p>
-              </div>
-
-              <div className="rounded-3xl bg-white p-5 shadow-sm">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Resultado do mês
-                </p>
-                <p className={`mt-2 text-2xl font-bold ${quickReading.monthResult < 0 ? "text-rose-600" : "text-emerald-600"}`}>
-                  {formatCurrency(quickReading.monthResult)}
-                </p>
-              </div>
-
-              <div className="rounded-3xl bg-white p-5 shadow-sm">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Faturas em aberto
-                </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {formatCurrency(quickReading.openInvoicesTotal)}
-                </p>
-              </div>
-
-              <div className="rounded-3xl bg-white p-5 shadow-sm">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Gasto seguro
-                </p>
-                <p className={`mt-2 text-2xl font-bold ${spendingCapacitySummary.extraSafeSpend <= 0 ? "text-rose-600" : "text-emerald-600"}`}>
-                  {formatCurrency(spendingCapacitySummary.extraSafeSpend)}
-                </p>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="text-sm font-semibold text-slate-900">
-                Alertas importantes
+              <h2 className="mt-3 text-4xl font-black leading-tight text-white">
+                {canBuyTitle}
               </h2>
 
-              <div className="space-y-3">
-                {smartAlerts.map((alert) => {
-                  const styles = getAlertStyles(alert.tone);
+              <p className="mt-4 text-base leading-relaxed text-slate-200">
+                {canBuySubtitle}
+              </p>
 
-                  return (
-                    <div
-                      key={alert.id}
-                      className={`rounded-2xl border p-4 ${styles.container}`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className={`text-sm font-semibold ${styles.title}`}>
-                          {alert.title}
-                        </p>
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${styles.badge}`}>
-                          {styles.label}
-                        </span>
-                      </div>
-                      <p className={`mt-1 text-sm ${styles.text}`}>
-                        {alert.message}
-                      </p>
-                    </div>
-                  );
-                })}
+              <div className="mt-6 rounded-3xl border border-white/10 bg-black/20 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Decisão mais segura
+                </p>
+                <p className="mt-2 text-sm font-bold leading-relaxed text-white">
+                  {decisionSummary}
+                </p>
               </div>
             </section>
 
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-slate-900">
-                  Próximos meses
-                </h2>
-                <span className="text-xs text-slate-500">
-                  {monthlyForecast.filter((item) => item.isCritical).length} mês(es) em risco
-                </span>
-              </div>
+            <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-xl shadow-slate-950/30">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">
+                Por quê?
+              </p>
 
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                {monthlyForecast.map((month) => (
+              <div className="mt-4 space-y-3">
+                {decisionReasons.map((reason) => (
                   <div
-                    key={month.key}
-                    className={`rounded-2xl border p-4 ${
-                      month.isCritical
-                        ? "border-rose-200 bg-rose-50"
-                        : "border-slate-200 bg-white"
-                    }`}
+                    key={reason.id}
+                    className="rounded-2xl border border-white/10 bg-black/20 p-4"
                   >
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      {month.label}
-                    </p>
-                    <p className={`mt-2 text-xl font-bold ${month.isCritical ? "text-rose-600" : "text-emerald-600"}`}>
-                      {formatCurrency(month.projectedBalance)}
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-white">
+                          {reason.label}
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                          {reason.helper}
+                        </p>
+                      </div>
 
-                    <div className="mt-3 space-y-1 text-xs text-slate-500">
-                      <p>Entradas recorrentes: {formatCurrency(month.recurringIncome)}</p>
-                      <p>Saídas recorrentes: {formatCurrency(month.recurringExpense)}</p>
-                      <p>Parcelas futuras: {formatCurrency(month.installmentImpact)}</p>
+                      <p
+                        className={`shrink-0 text-sm font-black ${
+                          reason.danger ? "text-rose-300" : "text-emerald-300"
+                        }`}
+                      >
+                        {reason.value}
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
             </section>
 
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                <p className="text-sm font-semibold text-slate-900">
-                  Quanto você pode gastar com segurança
-                </p>
-                <p className={`mt-2 text-3xl font-bold ${spendingCapacitySummary.extraSafeSpend <= 0 ? "text-rose-600" : "text-emerald-600"}`}>
-                  {formatCurrency(spendingCapacitySummary.extraSafeSpend)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Baseado na sua projeção atual para o mês filtrado.
-                </p>
+            <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Link
+                href="/invoices"
+                className="rounded-[1.5rem] bg-white px-5 py-4 text-center text-sm font-black text-slate-950 transition hover:bg-slate-100"
+              >
+                Ver faturas
+              </Link>
 
-                <div className="mt-4 space-y-1 text-xs text-slate-500">
-                  <p>Limite seguro por dia: {formatCurrency(spendingCapacitySummary.safeDailySpend)}</p>
-                  <p>Dias restantes considerados: {spendingCapacitySummary.daysRemaining}</p>
-                  {spendingCapacitySummary.lowestFutureBalance && (
+              <Link
+                href="/simular-compra"
+                className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-5 py-4 text-center text-sm font-black text-white transition hover:bg-white/10"
+              >
+                Simular compra
+              </Link>
+            </section>
+
+            <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-xl shadow-slate-950/30">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">
+                Resumo rápido
+              </p>
+
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400">Limite mensal planejado</span>
+                  <span className="font-black text-white">
+                    {monthlyConsciousLimitSummary.hasMonthlyLimit
+                      ? formatCurrency(monthlyConsciousLimitSummary.totalMonthlyLimit)
+                      : "Não definido"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400">Usado no mês</span>
+                  <span className="font-black text-white">
+                    {formatCurrency(monthlyConsciousLimitSummary.usedInSelectedMonth)}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400">Parcelas futuras já lançadas</span>
+                  <span className="font-black text-white">
+                    {formatCurrency(futureInstallmentsTotal)}
+                  </span>
+                </div>
+              </div>
+
+              <details className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                <summary className="cursor-pointer text-sm font-black text-slate-200">
+                  Ver detalhe técnico
+                </summary>
+
+                <div className="mt-4 space-y-3 text-sm text-slate-300">
+                  <p>Entradas do mês: {formatCurrency(totalIncomes)}</p>
+                  <p>Saídas do mês: {formatCurrency(totalExpenses)}</p>
+                  <p>
+                    Recorrências pendentes:{" "}
+                    {formatCurrency(
+                      monthlyRecurringProjection.expensesTotal -
+                        monthlyRecurringProjection.incomesTotal
+                    )}
+                  </p>
+                  {dailyProjectionSummary.lowestPoint && (
                     <p>
-                      Ponto mais apertado: dia {spendingCapacitySummary.lowestFutureBalance.day} com{" "}
-                      {formatCurrency(spendingCapacitySummary.lowestFutureBalance.balance)}
+                      Momento mais apertado:{" "}
+                      {dailyProjectionSummary.lowestPoint.label} com{" "}
+                      {formatCurrency(dailyProjectionSummary.lowestPoint.balance)}.
                     </p>
                   )}
                 </div>
-              </div>
-
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                <p className="text-sm font-semibold text-slate-900">
-                  Leitura rápida
-                </p>
-
-                <div className="mt-4 space-y-3 text-sm text-slate-600">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Entradas do mês</span>
-                    <span className="font-semibold text-emerald-600">
-                      {formatCurrency(totalIncomes)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Saídas do mês</span>
-                    <span className="font-semibold text-rose-600">
-                      {formatCurrency(totalExpenses)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Recorrências pendentes</span>
-                    <span className="font-semibold text-slate-900">
-                      {formatCurrency(
-                        monthlyRecurringProjection.expensesTotal -
-                          monthlyRecurringProjection.incomesTotal
-                      )}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Parcelas futuras</span>
-                    <span className="font-semibold text-slate-900">
-                      {formatCurrency(futureInstallmentsTotal)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Faturas abertas</span>
-                    <span className="font-semibold text-slate-900">
-                      {formatCurrency(openInvoicesTotal)}
-                    </span>
-                  </div>
-
-                  {dailyProjectionSummary.lowestPoint && (
-                    <div className="rounded-2xl bg-slate-50 p-3 text-xs text-slate-500">
-                      Momento mais apertado em{" "}
-                      <span className="font-semibold text-slate-700">
-                        {dailyProjectionSummary.lowestPoint.label}
-                      </span>{" "}
-                      com projeção de{" "}
-                      <span className="font-semibold text-slate-700">
-                        {formatCurrency(dailyProjectionSummary.lowestPoint.balance)}
-                      </span>.
-                    </div>
-                  )}
-                </div>
-              </div>
+              </details>
             </section>
           </>
         )}
       </div>
     </main>
   );
+
 }
