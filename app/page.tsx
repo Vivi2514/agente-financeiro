@@ -91,6 +91,9 @@ type RecurringTransaction = {
   isFixed?: boolean | null;
   dayOfMonth: number;
   active: boolean;
+  status?: "PLANNED" | "PAID" | "IGNORED";
+  isPaid?: boolean;
+  realTransactionId?: string | null;
   account?: {
     id: string;
     name: string;
@@ -979,10 +982,15 @@ export default function DashboardPage() {
     router.push(path);
   }
 
-  function goToTransactionsWithQuickMode(mode: "expense" | "income" | "future" = "expense") {
+  function goToTransactionsWithQuickMode(mode: "expense" | "income" = "expense") {
     closeQuickActionModal();
-    const query = mode === "expense" ? "" : `?quickMode=${mode}`;
-    router.push(`/transactions${query}`);
+
+    if (mode === "income") {
+      router.push("/transactions?quickMode=income");
+      return;
+    }
+
+    router.push("/transactions");
   }
 
   function handleAddDebt(event: FormEvent<HTMLFormElement>) {
@@ -1381,11 +1389,11 @@ export default function DashboardPage() {
         recurringsResult,
         simulationHistoryResult,
       ] = await Promise.allSettled([
-        fetch("/api/transactions", { cache: "no-store" }),
+        fetch(`/api/transactions?month=${selectedMonth}`, { cache: "no-store" }),
         fetch("/api/accounts", { cache: "no-store" }),
         fetch("/api/cards", { cache: "no-store" }),
         fetch("/api/invoices", { cache: "no-store" }),
-        fetch("/api/recurring", { cache: "no-store" }),
+        fetch(`/api/recurring?month=${selectedMonth}`, { cache: "no-store" }),
         fetch("/api/simulation-history", { cache: "no-store" }),
       ]);
 
@@ -1448,7 +1456,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+  }, [selectedMonth]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2058,6 +2066,63 @@ export default function DashboardPage() {
       variableExpensesTotal,
     };
   }, [filteredTransactions, recurrings, selectedMonthMeta.daysInMonth]);
+
+  const monthlyCommitments = useMemo(() => {
+    return [...recurrings]
+      .filter((item) => item.active)
+      .map((item) => {
+        const safeDay = Math.min(
+          Math.max(Number(item.dayOfMonth || 1), 1),
+          selectedMonthMeta.daysInMonth
+        );
+        const commitmentDate = new Date(
+          selectedMonthMeta.year,
+          selectedMonthMeta.month - 1,
+          safeDay
+        );
+        const isPaid = item.status === "PAID" || Boolean(item.isPaid);
+        const isIgnored = item.status === "IGNORED";
+        const isIncome = isIncomeType(item.type);
+
+        return {
+          ...item,
+          commitmentDate,
+          isPaid,
+          isIgnored,
+          isIncome,
+          statusLabel: isPaid ? "Pago" : isIgnored ? "Ignorado este mês" : "Previsto",
+          statusTone: isPaid ? "success" : isIgnored ? "muted" : "warning",
+          amount: Number(item.amount || 0),
+        };
+      })
+      .sort((a, b) => a.commitmentDate.getTime() - b.commitmentDate.getTime());
+  }, [recurrings, selectedMonthMeta.daysInMonth, selectedMonthMeta.month, selectedMonthMeta.year]);
+
+  const monthlyCommitmentsSummary = useMemo(() => {
+    const planned = monthlyCommitments.filter((item) => !item.isPaid && !item.isIgnored);
+    const paid = monthlyCommitments.filter((item) => item.isPaid);
+    const ignored = monthlyCommitments.filter((item) => item.isIgnored);
+
+    const plannedExpensesTotal = planned
+      .filter((item) => isExpenseType(item.type))
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const plannedIncomesTotal = planned
+      .filter((item) => isIncomeType(item.type))
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const paidTotal = paid.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    return {
+      planned,
+      paid,
+      ignored,
+      plannedExpensesTotal,
+      plannedIncomesTotal,
+      paidTotal,
+      totalCount: monthlyCommitments.length,
+    };
+  }, [monthlyCommitments]);
 
   const openInvoices = useMemo(() => {
     return [...invoices]
@@ -5773,59 +5838,87 @@ const dataHealthSummary = useMemo(() => {
               </div>
             </div>
 
-            <div className="space-y-3 px-5 py-5">
-              <button
-                type="button"
-                onClick={() => goToTransactionsWithQuickMode("expense")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-              >
-                <div>
-                  <p className="text-base font-bold text-slate-900">Registrar gasto</p>
-                  <p className="mt-1 text-sm text-slate-500">Compra, despesa, cartão ou pix.</p>
-                </div>
-                <span className="text-xl text-slate-400">›</span>
-              </button>
+            <div className="space-y-4 px-5 py-5">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                  Movimentos do dia
+                </p>
+                <div className="mt-2 grid grid-cols-1 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => goToTransactionsWithQuickMode("expense")}
+                    className="flex w-full items-center justify-between rounded-[22px] border border-rose-100 bg-rose-50/70 px-4 py-4 text-left transition hover:bg-rose-50"
+                  >
+                    <div>
+                      <p className="text-base font-bold text-slate-900">Registrar gasto agora</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Use quando o dinheiro já saiu: compra, Pix, débito ou cartão.
+                      </p>
+                    </div>
+                    <span className="text-xl text-rose-400">›</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => goToTransactionsWithQuickMode("income")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-              >
-                <div>
-                  <p className="text-base font-bold text-slate-900">Entrou dinheiro</p>
-                  <p className="mt-1 text-sm text-slate-500">Salário, devolução, extra ou qualquer entrada.</p>
+                  <button
+                    type="button"
+                    onClick={() => goToTransactionsWithQuickMode("income")}
+                    className="flex w-full items-center justify-between rounded-[22px] border border-emerald-100 bg-emerald-50/70 px-4 py-4 text-left transition hover:bg-emerald-50"
+                  >
+                    <div>
+                      <p className="text-base font-bold text-slate-900">Registrar entrada</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Salário, devolução, extra ou qualquer dinheiro que entrou.
+                      </p>
+                    </div>
+                    <span className="text-xl text-emerald-500">›</span>
+                  </button>
                 </div>
-                <span className="text-xl text-slate-400">›</span>
-              </button>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  closeQuickActionModal();
-                  handlePocketSave(pocketSuggestion);
-                }}
-                className="flex w-full items-center justify-between rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left transition hover:bg-emerald-100/70"
-              >
-                <div>
-                  <p className="text-base font-bold text-emerald-900">Guardar no cofrinho</p>
-                  <p className="mt-1 text-sm text-emerald-700">
-                    Sugestão atual: {formatCurrency(pocketSuggestion)}.
-                  </p>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                  Planejamento
+                </p>
+                <div className="mt-2 grid grid-cols-1 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeQuickActionModal();
+                      router.push("/recorrentes");
+                    }}
+                    className="flex w-full items-center justify-between rounded-[22px] border border-sky-100 bg-sky-50/80 px-4 py-4 text-left transition hover:bg-sky-50"
+                  >
+                    <div>
+                      <p className="text-base font-bold text-slate-900">Compromisso mensal</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Luz, Wifi, Netflix, Uber One e contas que se repetem.
+                      </p>
+                    </div>
+                    <span className="text-xl text-sky-500">›</span>
+                  </button>
                 </div>
-                <span className="text-xl text-emerald-600">›</span>
-              </button>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => goToTransactionsWithQuickMode("future")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-              >
-                <div>
-                  <p className="text-base font-bold text-slate-900">Agendar lançamento</p>
-                  <p className="mt-1 text-sm text-slate-500">Registrar algo para uma data futura.</p>
-                </div>
-                <span className="text-xl text-slate-400">›</span>
-              </button>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                  Proteção
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeQuickActionModal();
+                    handlePocketSave(pocketSuggestion);
+                  }}
+                  className="mt-2 flex w-full items-center justify-between rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left transition hover:bg-emerald-100/70"
+                >
+                  <div>
+                    <p className="text-base font-bold text-emerald-900">Guardar no cofrinho</p>
+                    <p className="mt-1 text-sm text-emerald-700">
+                      Sugestão atual: {formatCurrency(pocketSuggestion)}.
+                    </p>
+                  </div>
+                  <span className="text-xl text-emerald-600">›</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -6530,6 +6623,91 @@ const dataHealthSummary = useMemo(() => {
             >
               {projectedMonthSummary.message}
             </p>
+          </div>
+
+          <div className="mt-5 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Compromissos mensais</p>
+                <h3 className="mt-1 text-base font-bold text-slate-900">Custos fixos previstos para {formatMonthYear(selectedDate)}</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Aqui entram contas recorrentes como luz, internet, assinaturas e compromissos no cartão.
+                </p>
+              </div>
+              <Link href="/transactions?quickMode=future" className="app-button-secondary w-full justify-center md:w-auto">
+                Novo compromisso
+              </Link>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Previsto a pagar</p>
+                <p className="mt-1 text-lg font-bold text-rose-600">{formatCurrency(monthlyCommitmentsSummary.plannedExpensesTotal)}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Entradas previstas</p>
+                <p className="mt-1 text-lg font-bold text-emerald-600">{formatCurrency(monthlyCommitmentsSummary.plannedIncomesTotal)}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pagos no mês</p>
+                <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(monthlyCommitmentsSummary.paidTotal)}</p>
+              </div>
+            </div>
+
+            {monthlyCommitments.length === 0 ? (
+              <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
+                Nenhum compromisso mensal cadastrado ainda para este mês.
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {monthlyCommitments.map((item) => {
+                  const isIncome = isIncomeType(item.type);
+                  const statusClass = item.isPaid
+                    ? "bg-emerald-100 text-emerald-700"
+                    : item.isIgnored
+                    ? "bg-slate-100 text-slate-600"
+                    : "bg-amber-100 text-amber-700";
+
+                  return (
+                    <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-sm font-bold text-slate-900">{item.title}</p>
+                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusClass}`}>
+                              {item.statusLabel}
+                            </span>
+                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${isIncome ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                              {isIncome ? "Entrada" : "Saída"}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs text-slate-500">
+                            {item.commitmentDate.toLocaleDateString("pt-BR")} · {getCategoryLabel(item.category)} · {getPaymentMethodLabel(item.paymentMethod)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {item.card?.name ? `Cartão: ${item.card.name}` : item.account?.name ? `Conta: ${item.account.name}` : "Sem conta vinculada"}
+                            {item.realTransactionId ? ` · Transação real vinculada` : ""}
+                          </p>
+                        </div>
+
+                        <div className="flex shrink-0 items-center justify-between gap-3 md:flex-col md:items-end">
+                          <p className={`text-base font-bold ${isIncome ? "text-emerald-600" : "text-rose-600"}`}>
+                            {isIncome ? "+ " : "- "}{formatCurrency(item.amount)}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => startEditingRecurring(item)}
+                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                          >
+                            Editar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="mt-5">

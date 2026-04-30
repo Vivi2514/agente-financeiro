@@ -38,9 +38,11 @@ function normalizeBoolean(value: unknown) {
   return false;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const user = await requireCurrentUser();
+    const url = new URL(req.url);
+    const monthParam = url.searchParams.get("month"); // formato YYYY-MM
 
     const data = await prisma.recurringTransaction.findMany({
       where: {
@@ -50,17 +52,125 @@ export async function GET() {
         account: true,
         card: true,
       },
+      orderBy: monthParam
+        ? {
+            dayOfMonth: "asc",
+          }
+        : {
+            createdAt: "desc",
+          },
+    });
+
+    if (!monthParam) {
+      return NextResponse.json(
+        data.map((item) => ({
+          ...item,
+          amount: Number(item.amount),
+        }))
+      );
+    }
+
+    const [year, month] = monthParam.split("-").map(Number);
+
+    if (!year || !month || month < 1 || month > 12) {
+      return NextResponse.json(
+        { error: "Mês inválido. Use o formato YYYY-MM." },
+        { status: 400 }
+      );
+    }
+
+    const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const realTransactions = await prisma.transaction.findMany({
+      where: {
+        userId: user.id,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        account: true,
+        card: true,
+      },
       orderBy: {
-        createdAt: "desc",
+        date: "asc",
       },
     });
 
-    return NextResponse.json(
-      data.map((item) => ({
+    const normalizeText = (value?: string | null) =>
+      (value || "").trim().toLowerCase();
+
+    const normalizeAmount = (value: unknown) =>
+      Math.round(Number(value || 0) * 100);
+
+    const getPlannedDate = (dayOfMonth: number) => {
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const safeDay = Math.min(Math.max(Number(dayOfMonth || 1), 1), daysInMonth);
+      return new Date(year, month - 1, safeDay, 12, 0, 0, 0);
+    };
+
+    const result = data.map((item) => {
+      const plannedDate = getPlannedDate(item.dayOfMonth);
+
+      const paidTransaction = realTransactions.find((transaction) => {
+        const transactionDate = new Date(transaction.date);
+        const sameTitle = normalizeText(transaction.title) === normalizeText(item.title);
+        const sameType = transaction.type === item.type;
+        const sameCategory =
+          normalizeText(transaction.category) === normalizeText(item.category);
+        const samePaymentMethod =
+          normalizeText(transaction.paymentMethod) === normalizeText(item.paymentMethod);
+        const sameAccount = (transaction.accountId || null) === (item.accountId || null);
+        const sameCard = (transaction.cardId || null) === (item.cardId || null);
+        const sameDay = transactionDate.getDate() === plannedDate.getDate();
+
+        return (
+          sameTitle &&
+          sameType &&
+          sameCategory &&
+          samePaymentMethod &&
+          sameAccount &&
+          sameCard &&
+          sameDay
+        );
+      });
+
+      if (paidTransaction) {
+        return {
+          ...item,
+          amount: Number(paidTransaction.amount),
+          plannedAmount: Number(item.amount),
+          actualAmount: Number(paidTransaction.amount),
+          plannedDate: plannedDate.toISOString(),
+          actualDate: paidTransaction.date,
+          monthlyStatus: "PAID",
+          status: "PAID",
+          isPaid: true,
+          isIgnored: false,
+          realTransactionId: paidTransaction.id,
+          account: paidTransaction.account || item.account,
+          card: paidTransaction.card || item.card,
+        };
+      }
+
+      return {
         ...item,
         amount: Number(item.amount),
-      }))
-    );
+        plannedAmount: Number(item.amount),
+        actualAmount: null,
+        plannedDate: plannedDate.toISOString(),
+        actualDate: null,
+        monthlyStatus: "PLANNED",
+        status: "PLANNED",
+        isPaid: false,
+        isIgnored: false,
+        realTransactionId: null,
+      };
+    });
+
+    return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(
       { error: "Erro ao buscar recorrências", details: String(error) },

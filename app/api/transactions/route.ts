@@ -334,9 +334,11 @@ function serializeTransaction<T extends Record<string, any>>(transaction: T) {
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const user = await requireCurrentUser();
+    const url = new URL(req.url);
+    const monthParam = url.searchParams.get("month");
 
     const transactions = await prisma.transaction.findMany({
       where: {
@@ -350,7 +352,131 @@ export async function GET() {
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     });
 
-    return NextResponse.json(transactions.map(serializeTransaction));
+    if (!monthParam) {
+      return NextResponse.json(transactions.map(serializeTransaction));
+    }
+
+    const [selectedYear, selectedMonth] = monthParam.split("-").map(Number);
+
+    if (
+      !selectedYear ||
+      !selectedMonth ||
+      selectedMonth < 1 ||
+      selectedMonth > 12
+    ) {
+      return NextResponse.json(transactions.map(serializeTransaction));
+    }
+
+    const selectedMonthStart = new Date(selectedYear, selectedMonth - 1, 1);
+    const daysInSelectedMonth = new Date(selectedYear, selectedMonth, 0).getDate();
+
+    const getTransactionDate = (transaction: (typeof transactions)[number]) => {
+      return new Date(transaction.date || transaction.createdAt);
+    };
+
+    const buildFixedTemplateKey = (transaction: (typeof transactions)[number]) => {
+      return [
+        String(transaction.title || "").trim().toLowerCase(),
+        String(transaction.type || "").trim().toLowerCase(),
+        String(transaction.category || "").trim().toLowerCase(),
+        String(transaction.paymentMethod || "").trim().toLowerCase(),
+        transaction.accountId || "",
+        transaction.cardId || "",
+        Number(transaction.amount || 0).toFixed(2),
+      ].join("|");
+    };
+
+    const realTransactionExistsForTemplateInSelectedMonth = (
+      template: (typeof transactions)[number]
+    ) => {
+      const templateKey = buildFixedTemplateKey(template);
+
+      return transactions.some((transaction) => {
+        const transactionDate = getTransactionDate(transaction);
+
+        if (Number.isNaN(transactionDate.getTime())) return false;
+        if (transactionDate.getFullYear() !== selectedYear) return false;
+        if (transactionDate.getMonth() + 1 !== selectedMonth) return false;
+        if (transaction.isAdjustment) return false;
+
+        return buildFixedTemplateKey(transaction) === templateKey;
+      });
+    };
+
+    const fixedTemplates = new Map<string, (typeof transactions)[number]>();
+
+    transactions.forEach((transaction) => {
+      if (!transaction.isFixed) return;
+      if (transaction.isAdjustment) return;
+
+      const transactionDate = getTransactionDate(transaction);
+      if (Number.isNaN(transactionDate.getTime())) return;
+
+      const key = buildFixedTemplateKey(transaction);
+      const currentTemplate = fixedTemplates.get(key);
+
+      if (!currentTemplate) {
+        fixedTemplates.set(key, transaction);
+        return;
+      }
+
+      const currentTemplateDate = getTransactionDate(currentTemplate);
+
+      if (transactionDate.getTime() < currentTemplateDate.getTime()) {
+        fixedTemplates.set(key, transaction);
+      }
+    });
+
+    const generatedFixedTransactions = Array.from(fixedTemplates.values())
+      .filter((template) => {
+        const templateDate = getTransactionDate(template);
+        if (Number.isNaN(templateDate.getTime())) return false;
+
+        const templateMonthStart = new Date(
+          templateDate.getFullYear(),
+          templateDate.getMonth(),
+          1
+        );
+
+        if (selectedMonthStart.getTime() < templateMonthStart.getTime()) {
+          return false;
+        }
+
+        return !realTransactionExistsForTemplateInSelectedMonth(template);
+      })
+      .map((template) => {
+        const templateDate = getTransactionDate(template);
+        const day = Math.min(
+          Math.max(templateDate.getDate(), 1),
+          daysInSelectedMonth
+        );
+        const projectedDate = new Date(selectedYear, selectedMonth - 1, day, 12);
+        const amount = Number(template.amount || 0);
+
+        return {
+          ...template,
+          id: `virtual-${template.id}-${monthParam}`,
+          date: projectedDate,
+          createdAt: projectedDate,
+          updatedAt: projectedDate,
+          status: TransactionStatus.PLANNED,
+          expectedAmount: amount,
+          actualAmount: null,
+          expectedDate: projectedDate,
+          actualDate: null,
+          invoiceId: null,
+          invoice: null,
+          isVirtual: true,
+        };
+      });
+
+    const result = [...transactions, ...generatedFixedTransactions].sort((a, b) => {
+      const dateA = getTransactionDate(a).getTime();
+      const dateB = getTransactionDate(b).getTime();
+      return dateB - dateA;
+    });
+
+    return NextResponse.json(result.map(serializeTransaction));
   } catch (error) {
     console.error("Erro ao buscar transações:", error);
     return NextResponse.json(

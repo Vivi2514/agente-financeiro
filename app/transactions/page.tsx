@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type PaymentMethod =
   | ""
@@ -382,7 +382,87 @@ function getCreditCardFutureInvoiceWarning(params: {
   };
 }
 
+
+function suggestExpenseCategoryFromTitle(title: string) {
+  const normalized = title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (!normalized.trim()) return null;
+
+  const rules: Array<{ category: string; terms: string[] }> = [
+    {
+      category: "Transporte",
+      terms: ["uber", "99", "taxi", "metro", "onibus", "bilhete", "combustivel", "gasolina", "estacionamento"],
+    },
+    {
+      category: "Alimentação",
+      terms: ["ifood", "mercado", "supermercado", "padaria", "restaurante", "lanche", "almoço", "almoco", "jantar", "cafe", "delivery", "hortifruti"],
+    },
+    {
+      category: "Saúde",
+      terms: ["farmacia", "drogaria", "remedio", "consulta", "exame", "dentista", "medico", "hospital"],
+    },
+    {
+      category: "Pet",
+      terms: ["pet", "petshop", "racao", "veterinario", "banho", "tosa"],
+    },
+    {
+      category: "Casa",
+      terms: ["luz", "energia", "agua", "sabesp", "internet", "wifi", "wi-fi", "vivo", "claro", "tim", "aluguel", "condominio", "gas", "limpeza"],
+    },
+    {
+      category: "Lazer",
+      terms: ["netflix", "spotify", "cinema", "show", "uber one", "prime", "amazon prime", "disney", "hbo", "max"],
+    },
+    {
+      category: "Vestuário",
+      terms: ["roupa", "tenis", "sapato", "renner", "cea", "c&a", "riachuelo", "shein", "zara"],
+    },
+    {
+      category: "SkinCare",
+      terms: ["skincare", "protetor", "serum", "creme", "hidratante", "sabonete facial"],
+    },
+    {
+      category: "Pessoal",
+      terms: ["cabelo", "barbearia", "salao", "perfume", "presente", "manicure", "sobrancelha"],
+    },
+    {
+      category: "Eletrônico",
+      terms: ["celular", "iphone", "samsung", "fone", "notebook", "carregador", "eletronico"],
+    },
+    {
+      category: "Reforma",
+      terms: ["reforma", "material", "tinta", "ferramenta", "obra", "parafuso", "madeira"],
+    },
+  ];
+
+  const match = rules.find((rule) =>
+    rule.terms.some((term) => normalized.includes(term)),
+  );
+
+  return match?.category || null;
+}
+
+function suggestIncomeCategoryFromTitle(title: string) {
+  const normalized = title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (normalized.includes("adiant")) return "Adiantamento";
+  if (normalized.includes("vale") || normalized.includes("va")) return "Vale alimentação";
+  if (normalized.includes("extra") || normalized.includes("reembolso") || normalized.includes("devolucao")) return "Extra";
+  if (normalized.includes("salario") || normalized.includes("pagamento")) return "Salário";
+
+  return null;
+}
+
 export default function TransactionsPage() {
+  const amountInputRef = useRef<HTMLInputElement | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
@@ -395,6 +475,7 @@ export default function TransactionsPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editForm, setEditForm] = useState<EditFormState | null>(null);
 
+  const [quickInput, setQuickInput] = useState("");
   const [title, setTitle] = useState("");
   const [amountInput, setAmountInput] = useState("R$ 0,00");
   const [type, setType] = useState<"income" | "expense">("expense");
@@ -502,6 +583,82 @@ export default function TransactionsPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const quickMode = params.get("quickMode");
+    const suggestedExpense = params.get("suggestedExpense");
+    const lastPaymentMethod = window.localStorage.getItem(
+      "transactions:lastPaymentMethod",
+    ) as PaymentMethod | null;
+    const lastAccountId = window.localStorage.getItem("transactions:lastAccountId");
+    const lastCardId = window.localStorage.getItem("transactions:lastCardId");
+
+    setSpecialType("normal");
+    setCreatedAt(getTodayString());
+
+    if (quickMode === "income") {
+      setType("income");
+      setCategory("Salário");
+      setPaymentMethod("pix");
+      setIsFixed(false);
+    } else {
+      setType("expense");
+      setCategory("Alimentação");
+      setPaymentMethod(lastPaymentMethod || "pix");
+    }
+
+    if (lastAccountId) setAccountId(lastAccountId);
+    if (lastCardId) setCardId(lastCardId);
+
+    if (suggestedExpense) {
+      setAmountInput(formatCurrencyInput(suggestedExpense));
+    }
+
+    window.setTimeout(() => {
+      amountInputRef.current?.focus();
+      amountInputRef.current?.select();
+    }, 150);
+  }, []);
+
+  useEffect(() => {
+    if (!title.trim() || specialType !== "normal") return;
+
+    if (type === "expense") {
+      const suggestedCategory = suggestExpenseCategoryFromTitle(title);
+
+      if (suggestedCategory && category !== suggestedCategory) {
+        setCategory(suggestedCategory);
+      }
+
+      return;
+    }
+
+    const suggestedIncomeCategory = suggestIncomeCategoryFromTitle(title);
+
+    if (suggestedIncomeCategory && category !== suggestedIncomeCategory) {
+      setCategory(suggestedIncomeCategory);
+    }
+  }, [title, type, specialType]);
+
+  useEffect(() => {
+    if (specialType === "card_adjustment") return;
+
+    if (paymentMethod === "credit_card") {
+      if (!cardId && cards.length === 1) {
+        setCardId(cards[0].id);
+      }
+      return;
+    }
+
+    if (paymentMethod === "voucher") return;
+
+    if (!accountId && accounts.length === 1) {
+      setAccountId(accounts[0].id);
+    }
+  }, [accounts, cards, accountId, cardId, paymentMethod, specialType]);
 
   useEffect(() => {
     if (specialType !== "card_adjustment") return;
@@ -952,7 +1109,60 @@ export default function TransactionsPage() {
     setSelectedMonthValue(getMonthInputValue(new Date()));
   }
 
+  function formatNumberToCurrencyInput(value: number) {
+    return Number(value || 0).toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    });
+  }
+
+  function extractQuickInputParts(value: string) {
+    const trimmed = value.trim();
+    const amountMatch = trimmed.match(/(?:^|\s)(\d+(?:[.,]\d{1,2})?)\s*$/);
+
+    if (!amountMatch) {
+      return { titlePart: trimmed, amount: 0 };
+    }
+
+    const rawAmount = amountMatch[1];
+    const amount = Number(rawAmount.replace(",", "."));
+    const titlePart = trimmed.slice(0, amountMatch.index).trim();
+
+    return {
+      titlePart,
+      amount: Number.isFinite(amount) ? amount : 0,
+    };
+  }
+
+  function handleQuickInputChange(value: string) {
+    setQuickInput(value);
+
+    if (specialType !== "normal") {
+      setSpecialType("normal");
+    }
+
+    const { titlePart, amount } = extractQuickInputParts(value);
+
+    if (titlePart) {
+      setTitle(titlePart);
+
+      const suggestedCategory =
+        type === "income"
+          ? suggestIncomeCategoryFromTitle(titlePart)
+          : suggestExpenseCategoryFromTitle(titlePart);
+
+      if (suggestedCategory) {
+        setCategory(suggestedCategory);
+      }
+    }
+
+    if (amount > 0) {
+      setAmountInput(formatNumberToCurrencyInput(amount));
+    }
+  }
+
   function resetTransactionForm() {
+    setQuickInput("");
     setTitle("");
     setAmountInput("R$ 0,00");
     setType("expense");
@@ -1064,7 +1274,26 @@ export default function TransactionsPage() {
         throw new Error(errorData?.error || "Erro ao criar transação");
       }
 
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          "transactions:lastPaymentMethod",
+          String(payload.paymentMethod || "pix"),
+        );
+
+        if (payload.accountId) {
+          window.localStorage.setItem("transactions:lastAccountId", payload.accountId);
+        }
+
+        if (payload.cardId) {
+          window.localStorage.setItem("transactions:lastCardId", payload.cardId);
+        }
+      }
+
       resetTransactionForm();
+      window.setTimeout(() => {
+        amountInputRef.current?.focus();
+        amountInputRef.current?.select();
+      }, 100);
       await loadData();
     } catch (error) {
       console.error(error);
@@ -1437,544 +1666,392 @@ export default function TransactionsPage() {
   const isMediumDecisionPressure = decisionPressureLevel === "medium";
 
   return (
-    <main className="min-h-screen bg-slate-50 p-4 md:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-4 app-card md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="app-subtitle">Transações</p>
-            <h1 className="app-title">Lançamentos financeiros</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Cadastre entradas e saídas do seu app financeiro
-            </p>
+    <main className="min-h-screen bg-[#F8FAFC] px-3 py-4 text-[#172033] md:px-8 md:py-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <header className="overflow-hidden rounded-[2rem] border border-[#E5EAF2] bg-white p-5 text-[#172033] shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-7">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-slate-400">
+                Transações
+              </p>
+              <h1 className="mt-2 text-2xl font-bold tracking-tight md:text-3xl">
+                Lançamentos
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-slate-500">
+                Registre seus gastos do dia e acompanhe o mês com clareza.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 rounded-[1.5rem] border border-[#E5EAF2] bg-[#F8FAFC] p-2 md:min-w-[420px]">
+              <div className="rounded-2xl bg-white p-3 text-[#172033]">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Entradas
+                </p>
+                <p className="mt-1 text-sm font-semibold text-[#059669] md:text-base">
+                  {formatCurrency(totalIncome)}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-[#172033]">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Saídas
+                </p>
+                <p className="mt-1 text-sm font-semibold text-[#E11D48] md:text-base">
+                  {formatCurrency(totalExpense)}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-[#172033]">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Saldo
+                </p>
+                <p className={`mt-1 text-sm font-semibold md:text-base ${balance >= 0 ? "text-[#0F172A]" : "text-[#E11D48]"}`}>
+                  {formatCurrency(balance)}
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Link href="/" className="app-button-primary">
-              Ir para dashboard
+          <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+            <Link href="/" className="shrink-0 rounded-full bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+              Dashboard
             </Link>
-
-            <Link href="/accounts" className="app-button-secondary">
+            <Link href="/accounts" className="shrink-0 rounded-full border border-[#E5EAF2] bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
               Contas e cartões
             </Link>
-
-            <Link href="/invoices" className="app-button-secondary">
+            <Link href="/invoices" className="shrink-0 rounded-full border border-[#E5EAF2] bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
               Faturas
             </Link>
           </div>
         </header>
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="app-card">
-            <p className="text-sm font-medium text-slate-500">Entradas</p>
-            <h2 className="mt-2 text-2xl font-bold text-emerald-600">
-              {formatCurrency(totalIncome)}
-            </h2>
-          </div>
-
-          <div className="app-card">
-            <p className="text-sm font-medium text-slate-500">Saídas</p>
-            <h2 className="mt-2 text-2xl font-bold text-rose-600">
-              {formatCurrency(totalExpense)}
-            </h2>
-          </div>
-
-          <div className="app-card">
-            <p className="text-sm font-medium text-slate-500">Saldo</p>
-            <h2
-              className={`mt-2 text-2xl font-bold ${
-                balance >= 0 ? "text-sky-600" : "text-rose-600"
-              }`}
+        <section className="grid grid-cols-1 gap-5 xl:grid-cols-[440px_minmax(0,1fr)] xl:items-start">
+          <aside className="space-y-4 xl:sticky xl:top-6">
+            <form
+              onSubmit={handleSubmit}
+              className="overflow-hidden rounded-[2rem] border border-[#E5EAF2] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.06)]"
             >
-              {formatCurrency(balance)}
-            </h2>
-          </div>
-        </section>
-
-        <section className="app-card">
-          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-slate-900">
-                Filtros e busca
-              </h2>
-              <p className="text-sm text-slate-500">
-                Primeiro escolha o mês e use a busca. Os filtros mais detalhados
-                ficam escondidos até você precisar.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowAdvancedFilters((current) => !current)}
-                className="app-button-secondary"
-              >
-                {showAdvancedFilters
-                  ? "Ocultar filtros avançados"
-                  : "Filtros avançados"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  clearFilters();
-                  setShowAdvancedFilters(false);
-                }}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Limpar tudo
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por título, categoria, conta ou cartão"
-              className="app-input"
-            />
-
-            <select
-              value={sortBy}
-              onChange={(e) =>
-                setSortBy(e.target.value as "date" | "amount" | "title")
-              }
-              className="app-input"
-            >
-              <option value="date">Ordenar por data</option>
-              <option value="amount">Ordenar por valor</option>
-              <option value="title">Ordenar por título</option>
-            </select>
-
-            <select
-              value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
-              className="app-input"
-            >
-              <option value="desc">Mais recentes primeiro</option>
-              <option value="asc">Mais antigas primeiro</option>
-            </select>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <span className="text-sm font-medium text-slate-600">Mês</span>
-
-            <button
-              type="button"
-              onClick={() => changeSelectedMonth("prev")}
-              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              ←
-            </button>
-
-            <input
-              type="month"
-              value={selectedMonthValue}
-              onChange={(e) => setSelectedMonthValue(e.target.value)}
-              className="app-input max-w-[180px]"
-            />
-            <button
-              type="button"
-              onClick={() => changeSelectedMonth("next")}
-              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              →
-            </button>
-
-            <button
-              type="button"
-              onClick={goToCurrentMonth}
-              className="app-button-secondary"
-            >
-              Mês atual
-            </button>
-          </div>
-
-          {showAdvancedFilters && (
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <select
-                value={filterType}
-                onChange={(e) =>
-                  setFilterType(e.target.value as "" | "income" | "expense")
-                }
-                className="app-input"
-              >
-                <option value="">Todos os tipos</option>
-                <option value="income">Entrada</option>
-                <option value="expense">Saída</option>
-              </select>
-
-              <select
-                value={filterInvoiceStatus}
-                onChange={(e) =>
-                  setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")
-                }
-                className="app-input"
-              >
-                <option value="">Todos os status</option>
-                <option value="open">Abertas</option>
-                <option value="paid">Protegidas / Fatura paga</option>
-              </select>
-
-              <select
-                value={filterCategory}
-                onChange={(e) => setFilterCategory(e.target.value)}
-                className="app-input"
-              >
-                <option value="">Todas as categorias</option>
-                {allCategoryOptions.map((cat) => (
-                  <option key={cat.value} value={cat.value}>
-                    {cat.label}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={filterPaymentMethod}
-                onChange={(e) => setFilterPaymentMethod(e.target.value)}
-                className="app-input"
-              >
-                <option value="">Todas as formas</option>
-                <option value="credit_card">Cartão de crédito</option>
-                <option value="debit_card">Cartão de débito</option>
-                <option value="pix">Pix</option>
-                <option value="cash">Dinheiro</option>
-                <option value="bank_transfer">Transferência</option>
-                <option value="boleto">Boleto</option>
-                <option value="voucher">Voucher / Vale alimentação</option>
-              </select>
-
-              <select
-                value={filterAccountId}
-                onChange={(e) => setFilterAccountId(e.target.value)}
-                className="app-input"
-              >
-                <option value="">Todas as contas</option>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={filterCardId}
-                onChange={(e) => setFilterCardId(e.target.value)}
-                className="app-input"
-              >
-                <option value="">Todos os cartões</option>
-                {cards.map((card) => (
-                  <option key={card.id} value={card.id}>
-                    {card.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-500">
-            <span className="rounded-full bg-slate-100 px-3 py-1">
-              {displayedTransactions.length} transação(ões) encontrada(s)
-            </span>
-            {hasActiveAdvancedFilters && (
-              <span className="rounded-full bg-sky-100 px-3 py-1 text-sky-700">
-                Filtros ativos
-              </span>
-            )}
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_1fr]">
-          <div className="app-card">
-            <div className="mb-5">
-              <h2 className="text-xl font-bold text-slate-900">
-                Nova transação
-              </h2>
-              <p className="text-sm text-slate-500">
-                Preencha os dados para registrar uma movimentação
-              </p>
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Natureza do lançamento
-                </label>
-                <select
-                  value={specialType}
-                  onChange={(e) =>
-                    setSpecialType(e.target.value as SpecialTransactionType)
-                  }
-                  className="w-full app-input"
-                >
-                  <option value="normal">Transação normal</option>
-                  <option value="card_adjustment">
-                    Ajuste inicial do cartão
-                  </option>
-                </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  Use ajuste inicial do cartão para registrar saldo já existente
-                  na fatura sem bagunçar suas categorias e metas.
-                </p>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Título
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={
-                    specialType === "card_adjustment"
-                      ? "Ex: Ajuste inicial do cartão"
-                      : "Ex: Mercado, Salário, Aluguel"
-                  }
-                  className="w-full app-input"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Valor
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={amountInput}
-                  onChange={(e) =>
-                    setAmountInput(formatCurrencyInput(e.target.value))
-                  }
-                  placeholder="R$ 0,00"
-                  className="w-full app-input"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Tipo
-                  </label>
-                  <select
-                    value={specialType === "card_adjustment" ? "expense" : type}
-                    onChange={(e) =>
-                      setType(e.target.value as "income" | "expense")
-                    }
-                    disabled={specialType === "card_adjustment"}
-                    className="w-full app-input disabled:cursor-not-allowed disabled:bg-slate-100"
-                  >
-                    <option value="expense">Saída</option>
-                    <option value="income">Entrada</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Data
-                  </label>
+              <div className="bg-white p-4 pb-3 md:p-5 md:pb-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">
+                      Novo lançamento
+                    </p>
+                    <h2 className="mt-1 text-xl font-semibold text-[#172033]">
+                      Registrar agora
+                    </h2>
+                  </div>
                   <input
                     type="date"
                     value={createdAt}
                     onChange={(e) => setCreatedAt(e.target.value)}
-                    className="w-full app-input"
+                    className="w-[138px] rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-slate-400"
+                  />
+                </div>
+
+                <div className="mt-4 rounded-[1.7rem] border border-[#DBEAFE] bg-[#EFF6FF] p-3 shadow-inner shadow-blue-100/40">
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.25em] text-[#2563EB]">
+                    Lançamento inteligente
+                  </label>
+                  <input
+                    type="text"
+                    value={quickInput}
+                    onChange={(e) => handleQuickInputChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && title.trim() && parseCurrencyToNumber(amountInput) > 0) {
+                        e.preventDefault();
+                        e.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    placeholder={type === "income" ? "Ex: salário 6585,25" : "Ex: uber 25 ou mercado 120"}
+                    className="mt-2 w-full rounded-2xl border border-[#BFDBFE] bg-white px-4 py-3 text-base font-semibold text-[#172033] outline-none placeholder:text-slate-400 focus:border-[#2563EB]"
+                  />
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Digite nome + valor. Ex: <span className="font-semibold text-slate-700">uber 25</span>. A categoria e o valor são preenchidos automaticamente.
+                  </p>
+                </div>
+
+                <div className="mt-4 rounded-[1.7rem] border border-[#E5EAF2] bg-white p-4 text-[#172033] shadow-inner shadow-slate-100/60">
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-400">
+                    Valor
+                  </label>
+                  <input
+                    ref={amountInputRef}
+                    type="text"
+                    inputMode="numeric"
+                    value={amountInput}
+                    onChange={(e) => setAmountInput(formatCurrencyInput(e.target.value))}
+                    placeholder="R$ 0,00"
+                    className="mt-1 w-full border-0 bg-transparent text-4xl font-bold tracking-tight text-[#172033] outline-none placeholder:text-slate-300"
+                  />
+                  <input
+                    ref={titleInputRef}
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder={
+                      specialType === "card_adjustment"
+                        ? "Ex: Ajuste inicial do cartão"
+                        : "Ex: Uber, mercado, salário..."
+                    }
+                    className="mt-3 w-full rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold text-[#172033] outline-none placeholder:text-slate-400 focus:border-[#93C5FD]"
                   />
                 </div>
               </div>
 
-              {specialType === "normal" ? (
+              <div className="space-y-4 border-t border-slate-100 bg-white p-4 md:p-5">
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Categoria
-                  </label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    className="w-full app-input"
-                  >
-                    {categoryOptions.map((cat) => (
-                      <option key={cat.value} value={cat.value}>
-                        {cat.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  Este lançamento será salvo como ajuste inicial do cartão e não
-                  entrará nas suas categorias e metas do mês.
-                </div>
-              )}
-
-              {specialType === "normal" && type === "expense" && (
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Tipo de lançamento
-                  </label>
-                  <select
-                    value={isFixed ? "fixed" : "variable"}
-                    onChange={(e) => setIsFixed(e.target.value === "fixed")}
-                    className="w-full app-input"
-                  >
-                    <option value="variable">Variável</option>
-                    <option value="fixed">Fixa</option>
-                  </select>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Use fixa para gastos recorrentes, como aluguel, academia ou
-                    assinaturas.
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Natureza
                   </p>
-                </div>
-              )}
-
-              {specialType === "normal" ? (
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Forma de pagamento
-                  </label>
-                  <select
-                    value={paymentMethod}
-                    onChange={(e) =>
-                      setPaymentMethod(e.target.value as PaymentMethod)
-                    }
-                    className="w-full app-input"
-                  >
-                    <option value="">Selecione</option>
-                    {type === "expense" && (
-                      <option value="credit_card">💳 Cartão de crédito</option>
-                    )}
-                    <option value="pix">💸 Pix</option>
-                    <option value="debit_card">💳 Cartão de débito</option>
-                    <option value="cash">💵 Dinheiro</option>
-                    <option value="bank_transfer">🏦 Transferência</option>
-                    <option value="boleto">🧾 Boleto</option>
-                    <option value="voucher">🎫 Vale alimentação</option>
-                  </select>
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-                  O ajuste inicial sempre usa <strong>cartão de crédito</strong>{" "}
-                  e fica fora das categorias de gasto.
-                </div>
-              )}
-
-              {specialType === "normal" && paymentMethod === "credit_card" && (
-                <>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">
-                      Tipo de compra no crédito
-                    </label>
-                    <select
-                      value={creditMode}
-                      onChange={(e) =>
-                        setCreditMode(e.target.value as CreditMode)
-                      }
-                      className="w-full app-input"
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSpecialType("normal")}
+                      className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${specialType === "normal" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}
                     >
-                      <option value="avista">Crédito à vista</option>
-                      <option value="parcelado">Crédito parcelado</option>
+                      Normal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSpecialType("card_adjustment")}
+                      className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${specialType === "card_adjustment" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}
+                    >
+                      Ajuste cartão
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Tipo
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={specialType === "card_adjustment"}
+                      onClick={() => setType("expense")}
+                      className={`rounded-2xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 ${(specialType === "card_adjustment" || type === "expense") ? "bg-[#FFF1F2] text-[#E11D48] ring-1 ring-[#FECDD3] shadow-[0_10px_30px_rgba(15,23,42,0.06)]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}
+                    >
+                      Saída
+                    </button>
+                    <button
+                      type="button"
+                      disabled={specialType === "card_adjustment"}
+                      onClick={() => setType("income")}
+                      className={`rounded-2xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 ${type === "income" && specialType !== "card_adjustment" ? "bg-[#059669] text-white shadow-[0_10px_30px_rgba(15,23,42,0.06)]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}
+                    >
+                      Entrada
+                    </button>
+                  </div>
+                </div>
+
+                {specialType === "normal" ? (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Como foi pago
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2">
+                      {type === "expense" && (
+                        <button
+                          type="button"
+                          onClick={() => setPaymentMethod("credit_card")}
+                          className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "credit_card" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}
+                        >
+                          💳 Crédito
+                        </button>
+                      )}
+                      <button type="button" onClick={() => setPaymentMethod("pix")} className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "pix" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>💸 Pix</button>
+                      <button type="button" onClick={() => setPaymentMethod("debit_card")} className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "debit_card" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>💳 Débito</button>
+                      <button type="button" onClick={() => setPaymentMethod("cash")} className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "cash" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>💵 Dinheiro</button>
+                      <button type="button" onClick={() => setPaymentMethod("bank_transfer")} className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "bank_transfer" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>🏦 Transf.</button>
+                      <button type="button" onClick={() => setPaymentMethod("boleto")} className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "boleto" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>🧾 Boleto</button>
+                      <button type="button" onClick={() => setPaymentMethod("voucher")} className={`rounded-2xl px-3 py-3 text-sm font-semibold transition ${paymentMethod === "voucher" ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>🎫 Vale</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                    O ajuste inicial sempre usa cartão de crédito e não entra nas categorias do mês.
+                  </div>
+                )}
+
+                {specialType === "normal" && (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Categoria
+                      </label>
+                      <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full rounded-2xl border border-[#E5EAF2] bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none focus:border-slate-400">
+                        {categoryOptions.map((cat) => (
+                          <option key={cat.value} value={cat.value}>{cat.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {type === "expense" && (
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Recorrência
+                        </label>
+                        <select value={isFixed ? "fixed" : "variable"} onChange={(e) => setIsFixed(e.target.value === "fixed")} className="w-full rounded-2xl border border-[#E5EAF2] bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none focus:border-slate-400">
+                          <option value="variable">Variável</option>
+                          <option value="fixed">Fixa</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {specialType === "normal" && paymentMethod === "credit_card" && (
+                  <div className="rounded-[1.5rem] border border-[#DBEAFE] bg-[#EFF6FF] p-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#2563EB]">
+                      Crédito
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => setCreditMode("avista")} className={`rounded-2xl px-3 py-3 text-sm font-semibold ${creditMode === "avista" ? "bg-[#EFF6FF] text-[#2563EB] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-sky-100"}`}>À vista</button>
+                      <button type="button" onClick={() => setCreditMode("parcelado")} className={`rounded-2xl px-3 py-3 text-sm font-semibold ${creditMode === "parcelado" ? "bg-[#EFF6FF] text-[#2563EB] ring-1 ring-[#BFDBFE]" : "bg-white text-slate-700 ring-1 ring-sky-100"}`}>Parcelado</button>
+                    </div>
+                    {creditMode === "parcelado" && (
+                      <input type="number" min={2} max={24} value={installments} onChange={(e) => setInstallments(e.target.value)} placeholder="Parcelas" className="mt-2 w-full rounded-2xl border border-[#DBEAFE] bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none focus:border-[#93C5FD]" />
+                    )}
+                  </div>
+                )}
+
+                {specialType === "card_adjustment" || paymentMethod === "credit_card" ? (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Cartão
+                    </label>
+                    <select value={cardId} onChange={(e) => setCardId(e.target.value)} className="w-full rounded-2xl border border-[#E5EAF2] bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none focus:border-slate-400">
+                      <option value="">Selecione um cartão</option>
+                      {cards.map((card) => (
+                        <option key={card.id} value={card.id}>{card.name}</option>
+                      ))}
                     </select>
                   </div>
+                ) : paymentMethod !== "voucher" ? (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Conta
+                    </label>
+                    <select value={accountId} onChange={(e) => setAccountId(e.target.value)} className="w-full rounded-2xl border border-[#E5EAF2] bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none focus:border-slate-400">
+                      <option value="">Selecione uma conta</option>
+                      {accounts.map((account) => (
+                        <option key={account.id} value={account.id}>{account.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                    Vale alimentação não usa conta bancária.
+                  </div>
+                )}
 
-                  {creditMode === "parcelado" && (
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-slate-700">
-                        Quantidade de parcelas
-                      </label>
-                      <input
-                        type="number"
-                        min={2}
-                        max={24}
-                        value={installments}
-                        onChange={(e) => setInstallments(e.target.value)}
-                        className="w-full app-input"
-                      />
-                    </div>
-                  )}
-                </>
-              )}
+                {creditCardFutureInvoiceWarning && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    <p className="font-semibold">⚠️ Vai para a próxima fatura</p>
+                    <p className="mt-1">
+                      A fatura atual foi fechada em {creditCardFutureInvoiceWarning.closedAt.toLocaleDateString("pt-BR")}. Esse lançamento será considerado para {creditCardFutureInvoiceWarning.nextInvoiceLabel}.
+                    </p>
+                  </div>
+                )}
 
-              {specialType === "card_adjustment" ||
-              paymentMethod === "credit_card" ? (
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Cartão
-                  </label>
-                  <select
-                    value={cardId}
-                    onChange={(e) => setCardId(e.target.value)}
-                    className="w-full app-input"
-                  >
-                    <option value="">Selecione um cartão</option>
-                    {cards.map((card) => (
-                      <option key={card.id} value={card.id}>
-                        {card.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : paymentMethod !== "voucher" ? (
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Conta
-                  </label>
-                  <select
-                    value={accountId}
-                    onChange={(e) => setAccountId(e.target.value)}
-                    className="w-full app-input"
-                  >
-                    <option value="">Selecione uma conta</option>
-                    {accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                  Lançamentos com vale alimentação não usam conta bancária.
-                </div>
-              )}
-
-              {creditCardFutureInvoiceWarning && (
-                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  <p className="font-black">
-                    ⚠️ Essa compra vai para a próxima fatura.
-                  </p>
-                  <p className="mt-1">
-                    A fatura atual foi fechada em{" "}
-                    {creditCardFutureInvoiceWarning.closedAt.toLocaleDateString(
-                      "pt-BR",
-                    )}
-                    . Esse lançamento será considerado para{" "}
-                    {creditCardFutureInvoiceWarning.nextInvoiceLabel}.
-                  </p>
-                  <p className="mt-2 text-xs text-amber-800">
-                    Pausa rápida: confirme se vale mesmo usar crédito agora ou
-                    se é melhor pagar no débito/Pix.
-                  </p>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="app-button-primary w-full disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {submitting ? "Salvando..." : "Salvar transação"}
-              </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full rounded-[1.35rem] bg-[#2563EB] px-5 py-4 text-base font-semibold text-white shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? "Salvando..." : "Salvar transação"}
+                </button>
+              </div>
             </form>
-          </div>
+          </aside>
 
-          <div className="app-card">
-            <div className="mb-5 flex items-center justify-between gap-3">
+          <section className="space-y-4">
+            <div className="rounded-[2rem] border border-[#E5EAF2] bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-5">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">
+                    Mês e busca
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-[#172033]">
+                    {formatMonthLabel(selectedMonthValue)} · {displayedTransactions.length} lançamento(s)
+                  </h2>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => changeSelectedMonth("prev")} className="rounded-2xl border border-[#E5EAF2] bg-white px-3 py-2 text-sm font-semibold text-slate-700">←</button>
+                  <input type="month" value={selectedMonthValue} onChange={(e) => setSelectedMonthValue(e.target.value)} className="w-[145px] rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-3 py-2 text-sm font-medium text-slate-700 outline-none" />
+                  <button type="button" onClick={() => changeSelectedMonth("next")} className="rounded-2xl border border-[#E5EAF2] bg-white px-3 py-2 text-sm font-semibold text-slate-700">→</button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
+                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Buscar por título, categoria, conta ou cartão" className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-slate-400" />
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "date" | "amount" | "title")} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold text-slate-800 outline-none">
+                  <option value="date">Ordenar por data</option>
+                  <option value="amount">Ordenar por valor</option>
+                  <option value="title">Ordenar por título</option>
+                </select>
+                <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold text-slate-800 outline-none">
+                  <option value="desc">Recentes primeiro</option>
+                  <option value="asc">Antigas primeiro</option>
+                </select>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={goToCurrentMonth} className="rounded-full bg-[#EFF6FF] px-4 py-2 text-xs font-semibold text-[#1D4ED8] ring-1 ring-[#BFDBFE]">Mês atual</button>
+                <button type="button" onClick={() => setShowAdvancedFilters((current) => !current)} className="rounded-full border border-[#E5EAF2] bg-white px-4 py-2 text-xs font-semibold text-slate-700">
+                  {showAdvancedFilters ? "Ocultar filtros" : "Filtros avançados"}
+                </button>
+                <button type="button" onClick={() => { clearFilters(); setShowAdvancedFilters(false); }} className="rounded-full border border-[#E5EAF2] bg-white px-4 py-2 text-xs font-semibold text-slate-700">Limpar</button>
+                {hasActiveAdvancedFilters && <span className="rounded-full bg-blue-50 px-4 py-2 text-xs font-semibold text-[#2563EB]">Filtros ativos</span>}
+              </div>
+
+              {showAdvancedFilters && (
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <select value={filterType} onChange={(e) => setFilterType(e.target.value as "" | "income" | "expense")} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold outline-none">
+                    <option value="">Todos os tipos</option>
+                    <option value="income">Entrada</option>
+                    <option value="expense">Saída</option>
+                  </select>
+                  <select value={filterInvoiceStatus} onChange={(e) => setFilterInvoiceStatus(e.target.value as "" | "open" | "paid")} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold outline-none">
+                    <option value="">Todos os status</option>
+                    <option value="open">Abertas</option>
+                    <option value="paid">Protegidas / Fatura paga</option>
+                  </select>
+                  <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold outline-none">
+                    <option value="">Todas as categorias</option>
+                    {allCategoryOptions.map((cat) => <option key={cat.value} value={cat.value}>{cat.label}</option>)}
+                  </select>
+                  <select value={filterPaymentMethod} onChange={(e) => setFilterPaymentMethod(e.target.value)} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold outline-none">
+                    <option value="">Todas as formas</option>
+                    <option value="credit_card">Cartão de crédito</option>
+                    <option value="debit_card">Cartão de débito</option>
+                    <option value="pix">Pix</option>
+                    <option value="cash">Dinheiro</option>
+                    <option value="bank_transfer">Transferência</option>
+                    <option value="boleto">Boleto</option>
+                    <option value="voucher">Voucher / Vale alimentação</option>
+                  </select>
+                  <select value={filterAccountId} onChange={(e) => setFilterAccountId(e.target.value)} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold outline-none">
+                    <option value="">Todas as contas</option>
+                    {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                  </select>
+                  <select value={filterCardId} onChange={(e) => setFilterCardId(e.target.value)} className="rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold outline-none">
+                    <option value="">Todos os cartões</option>
+                    {cards.map((card) => <option key={card.id} value={card.id}>{card.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-[2rem] border border-[#E5EAF2] bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">
+                <h2 className="text-lg font-semibold text-[#172033]">
                   Histórico de transações
                 </h2>
                 <p className="text-sm text-slate-500">
-                  Visualize todas as movimentações cadastradas
+                  Toque em editar quando precisar ajustar algum detalhe
                 </p>
               </div>
             </div>
@@ -1984,7 +2061,7 @@ export default function TransactionsPage() {
                 Carregando transações...
               </div>
             ) : displayedTransactions.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center text-slate-500">
+              <div className="rounded-2xl border border-dashed border-[#E5EAF2] py-10 text-center text-slate-500">
                 Nenhuma transação encontrada com os filtros atuais.
               </div>
             ) : (
@@ -2323,7 +2400,7 @@ export default function TransactionsPage() {
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
-                                <h3 className="truncate text-base font-bold text-slate-900">
+                                <h3 className="truncate text-base font-medium text-[#172033]">
                                   {isGroupedPurchase
                                     ? groupedPurchase?.baseTitle ||
                                       transaction.title
@@ -2334,7 +2411,7 @@ export default function TransactionsPage() {
                                   className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                                     normalizedType === "income"
                                       ? "bg-emerald-100 text-emerald-700"
-                                      : "bg-rose-100 text-rose-700"
+                                      : "bg-rose-100 text-[#E11D48]"
                                   }`}
                                 >
                                   {normalizedType === "income"
@@ -2343,14 +2420,14 @@ export default function TransactionsPage() {
                                 </span>
 
                                 {isAdjustment ? (
-                                  <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                                  <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
                                     Ajuste
                                   </span>
                                 ) : normalizedType === "expense" ? (
                                   <span
                                     className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                                       transaction.isFixed
-                                        ? "bg-sky-100 text-sky-700"
+                                        ? "bg-blue-50 text-[#2563EB]"
                                         : "bg-amber-100 text-amber-700"
                                     }`}
                                   >
@@ -2359,13 +2436,13 @@ export default function TransactionsPage() {
                                 ) : null}
 
                                 {isPaidInvoice && (
-                                  <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
+                                  <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-[#2563EB]">
                                     Fatura paga
                                   </span>
                                 )}
 
                                 {isInstallment && (
-                                  <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                                  <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
                                     {isGroupedPurchase
                                       ? `Parcelado em ${groupedPurchase?.installmentTotal || transaction.installmentTotal || 1}x`
                                       : "Parcelado"}
@@ -2422,10 +2499,10 @@ export default function TransactionsPage() {
 
                             <div className="flex flex-col items-end gap-3">
                               <p
-                                className={`text-lg font-bold ${
+                                className={`text-lg font-medium ${
                                   normalizedType === "income"
-                                    ? "text-emerald-600"
-                                    : "text-rose-600"
+                                    ? "text-[#059669]"
+                                    : "text-[#E11D48]"
                                 }`}
                               >
                                 {normalizedType === "income" ? "+ " : "- "}
@@ -2438,7 +2515,7 @@ export default function TransactionsPage() {
 
                               <div className="flex flex-wrap justify-end gap-2">
                                 {isPaidInvoice ? (
-                                  <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500">
+                                  <span className="rounded-xl border border-[#E5EAF2] bg-[#F8FAFC] px-3 py-2 text-sm font-medium text-slate-500">
                                     Transação protegida
                                   </span>
                                 ) : (
@@ -2451,8 +2528,8 @@ export default function TransactionsPage() {
                                       }
                                       className={`rounded-xl border px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                         isInstallment
-                                          ? "border-slate-200 text-slate-400"
-                                          : "border-sky-200 text-sky-700 hover:bg-sky-50"
+                                          ? "border-[#E5EAF2] text-slate-400"
+                                          : "border-sky-200 text-[#2563EB] hover:bg-[#EFF6FF]"
                                       }`}
                                     >
                                       {isGroupedPurchase
@@ -2487,19 +2564,21 @@ export default function TransactionsPage() {
               </div>
             )}
           </div>
+
+          </section>
         </section>
       </div>
 
       {expenseBlockModal.open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-4 backdrop-blur-sm sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/30 p-4 backdrop-blur-sm sm:items-center">
           <div className="w-full max-w-md overflow-hidden rounded-[2rem] border border-rose-200 bg-white shadow-2xl">
-            <div className="bg-slate-950 px-5 py-5 text-white">
+            <div className="bg-white px-5 py-5 text-[#172033]">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-rose-200">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.35em] text-rose-200">
                     Freio ativado
                   </p>
-                  <h3 className="mt-2 text-xl font-black leading-tight">
+                  <h3 className="mt-2 text-xl font-semibold leading-tight">
                     Esse gasto pede uma decisão consciente
                   </h3>
                   <p className="mt-2 text-sm text-slate-300">
@@ -2515,7 +2594,7 @@ export default function TransactionsPage() {
                 <button
                   type="button"
                   onClick={cancelBlockedExpense}
-                  className="shrink-0 rounded-full border border-white/20 px-3 py-2 text-xs font-bold text-white transition hover:bg-white/10"
+                  className="shrink-0 rounded-full border border-white/20 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
                 >
                   Fechar
                 </button>
@@ -2524,35 +2603,35 @@ export default function TransactionsPage() {
 
             <div className="space-y-4 p-5">
               <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                <div className="rounded-2xl bg-[#F8FAFC] p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                     Valor
                   </p>
-                  <p className="mt-1 text-sm font-black text-slate-950">
+                  <p className="mt-1 text-sm font-semibold text-[#172033]">
                     {formatCurrency(expenseBlockModal.amount)}
                   </p>
                 </div>
 
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                <div className="rounded-2xl bg-[#F8FAFC] p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                     Saldo após
                   </p>
                   <p
-                    className={`mt-1 text-sm font-black ${
+                    className={`mt-1 text-sm font-semibold ${
                       expenseBlockModal.projectedBalance < 0
-                        ? "text-rose-600"
-                        : "text-slate-950"
+                        ? "text-[#E11D48]"
+                        : "text-[#172033]"
                     }`}
                   >
                     {formatCurrency(expenseBlockModal.projectedBalance)}
                   </p>
                 </div>
 
-                <div className="rounded-2xl bg-rose-50 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-rose-500">
+                <div className="rounded-2xl bg-[#FFF1F2] p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-rose-500">
                     Dias perdidos
                   </p>
-                  <p className="mt-1 text-sm font-black text-rose-700">
+                  <p className="mt-1 text-sm font-semibold text-[#E11D48]">
                     {expenseBlockModal.daysImpact} dia(s)
                   </p>
                 </div>
@@ -2560,7 +2639,7 @@ export default function TransactionsPage() {
 
               {expenseBlockModal.futureInvoiceWarning && (
                 <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  <p className="font-black">
+                  <p className="font-semibold">
                     Essa compra vai para a próxima fatura.
                   </p>
                   <div className="mt-2 space-y-1">
@@ -2587,7 +2666,7 @@ export default function TransactionsPage() {
                 <div
                   className={`rounded-3xl border p-4 text-sm ${
                     expenseBlockModal.monthlyLimitWarning.exceededLimit
-                      ? "border-rose-200 bg-rose-50 text-rose-900"
+                      ? "border-rose-200 bg-[#FFF1F2] text-rose-900"
                       : expenseBlockModal.monthlyLimitWarning.usagePercent >= 80
                         ? "border-amber-200 bg-amber-50 text-amber-900"
                         : "border-emerald-200 bg-emerald-50 text-emerald-900"
@@ -2595,7 +2674,7 @@ export default function TransactionsPage() {
                 >
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <p className="font-black">
+                      <p className="font-semibold">
                         Impacto no limite mensal consciente
                       </p>
                       <p className="mt-1 text-xs opacity-80">
@@ -2603,7 +2682,7 @@ export default function TransactionsPage() {
                       </p>
                     </div>
 
-                    <span className="w-fit rounded-full bg-white/70 px-3 py-1 text-xs font-black">
+                    <span className="w-fit rounded-full bg-white/70 px-3 py-1 text-xs font-semibold">
                       {expenseBlockModal.monthlyLimitWarning.usagePercent.toFixed(
                         0,
                       )}
@@ -2613,20 +2692,20 @@ export default function TransactionsPage() {
 
                   <div className="mt-3 grid grid-cols-3 gap-2">
                     <div className="rounded-2xl bg-white/70 p-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                      <p className="text-[10px] font-medium uppercase tracking-wide opacity-70">
                         Antes
                       </p>
-                      <p className="mt-1 font-black">
+                      <p className="mt-1 font-semibold">
                         {formatCurrency(
                           expenseBlockModal.monthlyLimitWarning.monthlyUsed,
                         )}
                       </p>
                     </div>
                     <div className="rounded-2xl bg-white/70 p-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                      <p className="text-[10px] font-medium uppercase tracking-wide opacity-70">
                         Depois
                       </p>
-                      <p className="mt-1 font-black">
+                      <p className="mt-1 font-semibold">
                         {formatCurrency(
                           expenseBlockModal.monthlyLimitWarning
                             .projectedMonthlyUsage,
@@ -2634,10 +2713,10 @@ export default function TransactionsPage() {
                       </p>
                     </div>
                     <div className="rounded-2xl bg-white/70 p-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">
+                      <p className="text-[10px] font-medium uppercase tracking-wide opacity-70">
                         Limite
                       </p>
-                      <p className="mt-1 font-black">
+                      <p className="mt-1 font-semibold">
                         {formatCurrency(
                           expenseBlockModal.monthlyLimitWarning.monthlyLimit,
                         )}
@@ -2649,7 +2728,7 @@ export default function TransactionsPage() {
                     <div
                       className={`h-full rounded-full ${
                         expenseBlockModal.monthlyLimitWarning.exceededLimit
-                          ? "bg-rose-500"
+                          ? "bg-[#FFF1F2]0"
                           : expenseBlockModal.monthlyLimitWarning
                                 .usagePercent >= 80
                             ? "bg-amber-500"
@@ -2690,13 +2769,13 @@ export default function TransactionsPage() {
               <div
                 className={`rounded-3xl border p-4 text-sm ${
                   isHighDecisionPressure
-                    ? "border-rose-200 bg-rose-50 text-rose-800"
+                    ? "border-rose-200 bg-[#FFF1F2] text-rose-800"
                     : isMediumDecisionPressure
                       ? "border-amber-200 bg-amber-50 text-amber-900"
-                      : "border-slate-200 bg-slate-50 text-slate-700"
+                      : "border-[#E5EAF2] bg-[#F8FAFC] text-slate-700"
                 }`}
               >
-                <p className="font-black">
+                <p className="font-semibold">
                   {isHighDecisionPressure
                     ? "Esse gasto pode atrapalhar sua missão."
                     : isMediumDecisionPressure
@@ -2728,8 +2807,8 @@ export default function TransactionsPage() {
               </div>
 
               {isHighDecisionPressure && (
-                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-                  <p className="font-black">
+                <div className="rounded-2xl border border-rose-200 bg-[#FFF1F2] px-4 py-3 text-sm text-rose-800">
+                  <p className="font-semibold">
                     Melhor decisão agora: cancelar esta compra.
                   </p>
                   <p className="mt-1 text-xs">
@@ -2751,8 +2830,8 @@ export default function TransactionsPage() {
                   onClick={cancelBlockedExpense}
                   className={
                     isHighDecisionPressure
-                      ? "rounded-3xl bg-slate-950 px-4 py-4 text-sm font-black text-white transition hover:bg-slate-800"
-                      : "rounded-3xl border border-slate-200 bg-white px-4 py-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                      ? "rounded-3xl bg-[#2563EB] px-4 py-4 text-sm font-semibold text-white transition hover:bg-sky-700"
+                      : "rounded-3xl border border-[#E5EAF2] bg-white px-4 py-4 text-sm font-semibold text-slate-700 transition hover:bg-[#F8FAFC]"
                   }
                 >
                   {isHighDecisionPressure ? "Cancelar compra" : "Cancelar"}
@@ -2764,10 +2843,10 @@ export default function TransactionsPage() {
                   disabled={submitting}
                   className={
                     isHighDecisionPressure
-                      ? "rounded-3xl border border-slate-300 bg-white px-4 py-4 text-xs font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      ? "rounded-3xl border border-slate-300 bg-white px-4 py-4 text-xs font-semibold text-slate-600 transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-60"
                       : decisionPressureLevel === "medium"
-                        ? "rounded-3xl bg-slate-800 px-4 py-4 text-sm font-black text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        : "rounded-3xl bg-slate-950 px-4 py-4 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        ? "rounded-3xl bg-slate-800 px-4 py-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        : "rounded-3xl bg-[#2563EB] px-4 py-4 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
                   }
                 >
                   {submitting
