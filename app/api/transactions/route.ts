@@ -370,7 +370,7 @@ export async function GET(req: Request) {
     const selectedMonthStart = new Date(selectedYear, selectedMonth - 1, 1);
     const daysInSelectedMonth = new Date(selectedYear, selectedMonth, 0).getDate();
 
-    const getTransactionDate = (transaction: (typeof transactions)[number]) => {
+    const getTransactionDate = (transaction: Record<string, any>) => {
       return new Date(transaction.date || transaction.createdAt);
     };
 
@@ -427,7 +427,7 @@ export async function GET(req: Request) {
       }
     });
 
-    const generatedFixedTransactions = Array.from(fixedTemplates.values())
+    const generatedFixedTransactions: Array<Record<string, any>> = Array.from(fixedTemplates.values())
       .filter((template) => {
         const templateDate = getTransactionDate(template);
         if (Number.isNaN(templateDate.getTime())) return false;
@@ -470,7 +470,10 @@ export async function GET(req: Request) {
         };
       });
 
-    const result = [...transactions, ...generatedFixedTransactions].sort((a, b) => {
+    const result: Array<Record<string, any>> = [
+      ...transactions,
+      ...generatedFixedTransactions,
+    ].sort((a, b) => {
       const dateA = getTransactionDate(a).getTime();
       const dateB = getTransactionDate(b).getTime();
       return dateB - dateA;
