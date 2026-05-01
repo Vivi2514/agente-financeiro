@@ -773,6 +773,7 @@ export default function DashboardPage() {
   const [supportMenuOpen, setSupportMenuOpen] = useState(false);
   const [accelerationPanelOpen, setAccelerationPanelOpen] = useState(false);
   const [cofrinho, setCofrinho] = useState(0);
+  const [monthlyCardLimit, setMonthlyCardLimit] = useState(800);
   const [monthlyPocketGoal, setMonthlyPocketGoal] = useState(300);
   const [currentDebtTarget, setCurrentDebtTarget] = useState(2063);
   const [debts, setDebts] = useState<Debt[]>([]);
@@ -1575,12 +1576,14 @@ export default function DashboardPage() {
 
     const savedCofrinho = Number(window.localStorage.getItem("finance-app:cofrinho") || 0);
     const savedMonthlyPocketGoal = Number(window.localStorage.getItem("finance-app:monthly-pocket-goal") || 300);
+    const savedMonthlyCardLimit = Number(window.localStorage.getItem("finance-app:monthly-card-limit") || 800);
     const savedCurrentDebtTarget = Number(window.localStorage.getItem("finance-app:current-debt-target") || 2063);
     const savedMonthlyPocketSaved = Number(window.localStorage.getItem(`finance-app:monthly-pocket-saved:${getMonthInputValue(new Date())}`) || 0);
     const savedLastPocketHandledIncomeId = window.localStorage.getItem(`finance-app:last-pocket-income:${getMonthInputValue(new Date())}`) || "";
 
     setCofrinho(Number.isFinite(savedCofrinho) ? savedCofrinho : 0);
     setMonthlyPocketGoal(Number.isFinite(savedMonthlyPocketGoal) && savedMonthlyPocketGoal > 0 ? savedMonthlyPocketGoal : 300);
+    setMonthlyCardLimit(Number.isFinite(savedMonthlyCardLimit) && savedMonthlyCardLimit > 0 ? savedMonthlyCardLimit : 800);
     setCurrentDebtTarget(Number.isFinite(savedCurrentDebtTarget) && savedCurrentDebtTarget > 0 ? savedCurrentDebtTarget : 2063);
     setMonthlyPocketSaved(Number.isFinite(savedMonthlyPocketSaved) ? savedMonthlyPocketSaved : 0);
     setLastPocketHandledIncomeId(savedLastPocketHandledIncomeId);
@@ -1595,6 +1598,11 @@ export default function DashboardPage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("finance-app:monthly-pocket-goal", String(monthlyPocketGoal));
   }, [monthlyPocketGoal]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("finance-app:monthly-card-limit", String(monthlyCardLimit));
+  }, [monthlyCardLimit]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -5902,33 +5910,89 @@ const dataHealthSummary = useMemo(() => {
     setDebtPayoffModalOpen(true);
   }, [currentDebt, debtForecast.isCompleted, lastPayoffPromptDebtId]);
 
-  const availableAfterCardPressure = Math.max(
-    Number(currentAccountsBalance || 0) - Number(openInvoicesTotal || 0),
-    0
-  );
+  const fixedPendingExpensesTotal = Number(monthlyRecurringProjection.fixedExpensesTotal || 0);
+  const protectedPocketTotal = Number(cofrinho || 0);
+
+  const safeBalance =
+    Number(currentAccountsBalance || 0) -
+    Number(openInvoicesTotal || 0) -
+    fixedPendingExpensesTotal -
+    protectedPocketTotal;
+
+  const availableAfterCommitments = Math.max(safeBalance, 0);
+
   const safeSpendToday = Math.max(
     0,
     Math.min(
       Number(spendingCapacitySummary.safeDailySpend || 0),
       Number(spendingCapacitySummary.extraSafeSpend || 0),
-      availableAfterCardPressure
+      availableAfterCommitments
     )
   );
-  const shouldAvoidSpending = safeSpendToday <= 0;
+
+  const hasCommitmentPressure = openInvoicesTotal > 0 || fixedPendingExpensesTotal > 0;
+  const hasCreditCardUsageThisMonth = selectedMonthCreditPurchasesTotal > 0;
+  const shouldAvoidSpending = safeBalance <= 0 || safeSpendToday <= 0;
+  const monthDecisionTone = shouldAvoidSpending
+    ? "danger"
+    : safeSpendToday < 50 || hasCommitmentPressure || hasCreditCardUsageThisMonth
+    ? "warning"
+    : "success";
+
+  const firstPriority = safeBalance <= 0
+    ? "Não fazer compra nova agora. Primeiro quite as faturas e os custos fixos que já estão pendentes."
+    : safeSpendToday <= 50
+    ? "Gastar só com necessidade real hoje, porque a margem segura está pequena."
+    : hasCreditCardUsageThisMonth
+    ? "Evitar aumentar o cartão. O foco é atravessar o mês com dinheiro vivo."
+    : "Manter o ritmo e gastar só dentro da margem segura.";
+
+  const monthDecision = shouldAvoidSpending
+    ? {
+        label: "Melhor não comprar agora",
+        detail: "O dinheiro que aparece nas contas já está comprometido por faturas, custos fixos ou cofrinho protegido.",
+      }
+    : monthDecisionTone === "warning"
+    ? {
+        label: "Atenção antes de gastar",
+        detail: `Ainda existe uma margem de ${formatCurrency(safeSpendToday)} para hoje, mas o mês tem compromissos importantes pela frente.`,
+      }
+    : {
+        label: "Pode gastar com cuidado",
+        detail: `Você tem ${formatCurrency(safeSpendToday)} como margem segura para hoje. Não use o limite do cartão como dinheiro disponível.`,
+      };
+
+  const heroClasses = monthDecisionTone === "danger"
+    ? "border-rose-200 bg-white"
+    : monthDecisionTone === "warning"
+    ? "border-amber-200 bg-white"
+    : "border-emerald-200 bg-white";
+
+  const decisionBadgeClasses = monthDecisionTone === "danger"
+    ? "bg-rose-100 text-rose-700"
+    : monthDecisionTone === "warning"
+    ? "bg-amber-100 text-amber-700"
+    : "bg-emerald-100 text-emerald-700";
+
+  const decisionValueClasses = monthDecisionTone === "danger"
+    ? "text-rose-700"
+    : monthDecisionTone === "warning"
+    ? "text-amber-700"
+    : "text-emerald-700";
 
   return (
-    <main className="min-h-screen bg-slate-50 px-3 py-4 text-slate-950 md:px-8 md:py-8">
+    <main className="min-h-screen bg-[#f6f7fb] px-3 py-4 text-slate-950 md:px-8 md:py-8">
       {toast.visible ? (
-        <div className="fixed inset-x-3 top-3 z-50 mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-lg">
+        <div className="fixed inset-x-3 top-3 z-50 mx-auto max-w-md rounded-3xl border border-slate-200 bg-white p-4 shadow-xl">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-black text-slate-950">{toast.title}</p>
-              <p className="mt-1 text-sm text-slate-600">{toast.message}</p>
+              <p className="mt-1 text-sm leading-5 text-slate-600">{toast.message}</p>
             </div>
             <button
               type="button"
               onClick={() => setToast((current) => ({ ...current, visible: false }))}
-              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-bold text-slate-600"
+              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
             >
               Fechar
             </button>
@@ -5936,101 +6000,170 @@ const dataHealthSummary = useMemo(() => {
         </div>
       ) : null}
 
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
-        <header className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm md:p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
-                Modo anti-dívida
-              </p>
-              <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-950 md:text-3xl">
-                Decisão do dia
-              </h1>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                Três números para decidir rápido, sem scroll e sem pop-up.
-              </p>
-            </div>
-
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(event) => setSelectedMonth(event.target.value)}
-              className="h-11 rounded-full border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 outline-none"
-            />
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+        <header className="flex items-center justify-between gap-3 px-1">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+              App financeiro
+            </p>
+            <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-950">
+              Meu mês agora
+            </h1>
           </div>
+
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={(event) => setSelectedMonth(event.target.value)}
+            className="h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+          />
         </header>
 
-        <section className="rounded-[2rem] bg-slate-950 p-5 text-white shadow-sm md:p-6">
-          <div className="flex flex-col gap-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
-                  Posso gastar hoje
+        <section className={`overflow-hidden rounded-[2rem] border p-5 shadow-sm md:p-6 ${heroClasses}`}>
+          <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${decisionBadgeClasses}`}>
+                  {monthDecision.label}
+                </span>
+
+                <h2 className="mt-5 text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+                  Saldo seguro do mês
+                </h2>
+                <p className={`mt-2 text-5xl font-black tracking-tight md:text-6xl ${decisionValueClasses}`}>
+                  {formatCurrency(safeBalance)}
                 </p>
-                <p className={`mt-3 text-5xl font-black tracking-tight ${shouldAvoidSpending ? "text-rose-300" : "text-white"}`}>
-                  {formatCurrency(safeSpendToday)}
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                  {monthDecision.detail}
                 </p>
               </div>
 
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-black ${
-                  shouldAvoidSpending
-                    ? "bg-rose-400/15 text-rose-200"
-                    : "bg-emerald-400/15 text-emerald-200"
-                }`}
+              <Link
+                href="/transactions"
+                className="inline-flex h-12 shrink-0 items-center justify-center rounded-2xl bg-slate-950 px-5 text-sm font-black text-white shadow-sm transition hover:bg-slate-800"
               >
-                {shouldAvoidSpending ? "Segurar" : "Com limite"}
-              </span>
+                + Lançar
+              </Link>
             </div>
 
-            <p className="text-sm leading-6 text-slate-300">
-              {shouldAvoidSpending
-                ? "Melhor não comprar agora. Seu saldo real não cobre a pressão das faturas abertas."
-                : `Se passar de ${formatCurrency(safeSpendToday)} hoje, você começa a apertar o plano do mês.`}
-            </p>
+            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                Por que essa decisão?
+              </p>
 
-            <Link
-              href="/transactions"
-              className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-white px-5 text-sm font-black text-slate-950 transition hover:bg-slate-100"
-            >
-              + Lançar gasto
-            </Link>
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-600">Tenho nas contas</span>
+                  <span className="font-black text-slate-950">{formatCurrency(currentAccountsBalance)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-600">Faturas para pagar</span>
+                  <span className="font-black text-rose-600">- {formatCurrency(openInvoicesTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-600">Fixos pendentes</span>
+                  <span className="font-black text-rose-600">- {formatCurrency(fixedPendingExpensesTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-600">Cofrinho protegido</span>
+                  <span className="font-black text-slate-700">- {formatCurrency(protectedPocketTotal)}</span>
+                </div>
+                <div className="border-t border-slate-200 pt-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-black text-slate-950">Resultado seguro</span>
+                    <span className={`font-black ${safeBalance >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                      {formatCurrency(safeBalance)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                Prioridade agora
+              </p>
+              <p className="mt-2 text-base font-black text-slate-950">
+                {firstPriority}
+              </p>
+            </div>
           </div>
         </section>
 
-        <section className="grid grid-cols-2 gap-3">
-          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">
-              Tenho hoje
-            </p>
-            <p className={`mt-2 text-2xl font-black ${currentAccountsBalance >= 0 ? "text-slate-950" : "text-rose-600"}`}>
-              {formatCurrency(currentAccountsBalance)}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">saldo real nas contas</p>
-          </div>
+        <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          <div className="flex flex-col gap-4">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+                O que está travando seu mês
+              </p>
+              <h2 className="mt-1 text-2xl font-black text-slate-950">
+                Compromissos antes de compras novas
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                O dashboard não usa limite de cartão como dinheiro disponível. Ele mostra o que precisa ser resolvido antes de você assumir qualquer gasto novo.
+              </p>
+            </div>
 
-          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">
-              Cartão usado
-            </p>
-            <p className="mt-2 text-2xl font-black text-rose-600">
-              {formatCurrency(openInvoicesTotal)}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">faturas abertas</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-3xl border border-rose-100 bg-rose-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-rose-400">
+                  Faturas abertas
+                </p>
+                <p className="mt-2 text-xl font-black text-rose-700">
+                  {formatCurrency(openInvoicesTotal)}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-rose-700/80">
+                  Valor que já virou obrigação de pagamento.
+                </p>
+              </div>
+
+              <div className="rounded-3xl border border-amber-100 bg-amber-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-500">
+                  Fixos pendentes
+                </p>
+                <p className="mt-2 text-xl font-black text-amber-700">
+                  {formatCurrency(fixedPendingExpensesTotal)}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-amber-700/80">
+                  Contas previstas que ainda precisam caber no mês.
+                </p>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+                  Cartão usado agora
+                </p>
+                <p className="mt-2 text-xl font-black text-slate-950">
+                  {formatCurrency(selectedMonthCreditPurchasesTotal)}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Compra nova no cartão vira pressão para a próxima fatura.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-slate-950 p-4 text-white">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                Regra do dashboard
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-200">
+                Se o saldo seguro está negativo, o app não deve falar de limite disponível. Ele deve te lembrar que o foco é pagar o que já existe e preservar dinheiro vivo.
+              </p>
+            </div>
           </div>
         </section>
 
         <section className="grid grid-cols-2 gap-2">
           <Link
             href="/transactions?quickMode=income"
-            className="inline-flex h-12 items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 transition hover:bg-emerald-100"
+            className="inline-flex h-12 items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 shadow-sm transition hover:bg-emerald-100"
           >
             Recebi dinheiro
           </Link>
 
           <Link
             href="/recorrentes"
-            className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
             Paguei conta
           </Link>
@@ -6039,27 +6172,27 @@ const dataHealthSummary = useMemo(() => {
         <button
           type="button"
           onClick={() => setShowMoreDetails((current) => !current)}
-          className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-900 bg-slate-900 px-4 text-sm font-black text-white transition hover:bg-slate-800"
+          className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
         >
-          {showMoreDetails ? "Ocultar detalhes" : "Ver mais detalhes"}
+          {showMoreDetails ? "Ocultar detalhes" : "Ver detalhes do mês"}
         </button>
 
         {showMoreDetails ? (
           <section className="space-y-4">
-            <div className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
+                  <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
                     Últimos movimentos
                   </p>
                   <h2 className="mt-1 text-lg font-black text-slate-950">
-                    Só os mais recentes
+                    O que entrou e saiu por último
                   </h2>
                 </div>
 
                 <Link
                   href="/transactions"
-                  className="rounded-full border border-slate-200 px-3 py-2 text-xs font-black text-slate-600"
+                  className="rounded-full border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
                 >
                   Ver extrato
                 </Link>
@@ -6125,14 +6258,14 @@ const dataHealthSummary = useMemo(() => {
               </Link>
             </div>
 
-            <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-4 shadow-sm">
+            <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5 shadow-sm">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-amber-600">
+                  <p className="text-xs font-black uppercase tracking-[0.22em] text-amber-600">
                     Dívida e cofrinho
                   </p>
-                  <p className="mt-1 text-xs font-semibold text-amber-800">
-                    Guarde dinheiro quando sobrar. Use quando realmente pagar a dívida.
+                  <p className="mt-1 text-sm font-semibold text-amber-800">
+                    Guarde quando sobrar. Use quando realmente pagar a dívida.
                   </p>
                 </div>
                 <p className="text-xs font-black text-slate-700">
@@ -6171,10 +6304,6 @@ const dataHealthSummary = useMemo(() => {
                   Usar para dívida
                 </button>
               </div>
-
-              <p className="mt-2 text-[11px] font-semibold text-amber-800">
-                Guardar aumenta o cofrinho. Usar para dívida reduz o cofrinho e abate o valor da dívida atual.
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
