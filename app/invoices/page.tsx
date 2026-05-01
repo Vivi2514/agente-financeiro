@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Account = {
   id: string;
@@ -536,6 +536,7 @@ export default function InvoicesPage() {
   const [expandedFutureProjectionIds, setExpandedFutureProjectionIds] = useState<
     Record<string, boolean>
   >({});
+  const [mobileTab, setMobileTab] = useState<"current" | "future">("current");
 
   function toggleFutureProjectionExpanded(projectionId: string) {
     setExpandedFutureProjectionIds((current) => ({
@@ -734,86 +735,265 @@ export default function InvoicesPage() {
   }, [displayInvoices]);
 
 
-  const futureInvoicesProjectionSection =
-    futureInvoicesProjection.length > 0 ? (
-          <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
-                  Planejamento do cartão
-                </p>
-                <h2 className="mt-1 text-lg font-bold text-slate-950">
-                  Faturas futuras previstas
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Compras e parcelas que já estão comprometendo os próximos meses.
-                </p>
-              </div>
+  const currentInvoiceReference = useMemo(() => {
+    const candidates = invoicesOrdered
+      .filter((invoice) => invoice.status === "OPEN" && !invoice.presentation.isPaid)
+      .map((invoice) => {
+        const dueDate = parseLocalDate(invoice.dueDate) || new Date(invoice.year, invoice.month - 1, 1);
+        return {
+          month: dueDate.getMonth() + 1,
+          year: dueDate.getFullYear(),
+          time: new Date(dueDate.getFullYear(), dueDate.getMonth(), 1).getTime(),
+        };
+      })
+      .sort((a, b) => a.time - b.time);
 
-              <div className="rounded-2xl bg-rose-50 px-4 py-3 text-right">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-rose-500">
-                  Total futuro
+    return candidates[0] || null;
+  }, [invoicesOrdered]);
+
+  const currentInvoicesOrdered = useMemo(() => {
+    if (!currentInvoiceReference) {
+      return invoicesOrdered.filter((invoice) => !invoice.presentation.isPaid);
+    }
+
+    return invoicesOrdered.filter((invoice) => {
+      if (invoice.presentation.isPaid) return false;
+      const dueDate = parseLocalDate(invoice.dueDate) || new Date(invoice.year, invoice.month - 1, 1);
+      return (
+        dueDate.getMonth() + 1 === currentInvoiceReference.month &&
+        dueDate.getFullYear() === currentInvoiceReference.year
+      );
+    });
+  }, [currentInvoiceReference, invoicesOrdered]);
+
+  const futureOpenInvoicesOrdered = useMemo(() => {
+    if (!currentInvoiceReference) return [];
+
+    const currentTime = new Date(
+      currentInvoiceReference.year,
+      currentInvoiceReference.month - 1,
+      1,
+    ).getTime();
+
+    return invoicesOrdered.filter((invoice) => {
+      if (invoice.presentation.isPaid) return false;
+      const dueDate = parseLocalDate(invoice.dueDate) || new Date(invoice.year, invoice.month - 1, 1);
+      const dueReferenceTime = new Date(dueDate.getFullYear(), dueDate.getMonth(), 1).getTime();
+      return dueReferenceTime > currentTime;
+    });
+  }, [currentInvoiceReference, invoicesOrdered]);
+
+  const currentInvoicesTotal = useMemo(() => {
+    return currentInvoicesOrdered.reduce(
+      (sum, invoice) => sum + Number(invoice.displayTotal || 0),
+      0,
+    );
+  }, [currentInvoicesOrdered]);
+
+  const nextDueDateLabel = useMemo(() => {
+    const next = currentInvoicesOrdered
+      .map((invoice) => parseLocalDate(invoice.dueDate))
+      .filter((date): date is Date => Boolean(date))
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+
+    return next ? next.toLocaleDateString("pt-BR") : "-";
+  }, [currentInvoicesOrdered]);
+
+  const futureOpenInvoicesTotal = useMemo(() => {
+    return futureOpenInvoicesOrdered.reduce(
+      (sum, invoice) => sum + Number(invoice.displayTotal || 0),
+      0,
+    );
+  }, [futureOpenInvoicesOrdered]);
+
+  const futureImpactTotal = futureOpenInvoicesTotal + futureInvoicesTotal;
+
+  const futureMonthsSummary = useMemo(() => {
+    const grouped = new Map<string, {
+      key: string;
+      label: string;
+      total: number;
+      invoices: DisplayInvoice[];
+      itemCount: number;
+    }>();
+
+    futureOpenInvoicesOrdered.forEach((invoice) => {
+      const dueDate = parseLocalDate(invoice.dueDate) || new Date(invoice.year, invoice.month - 1, 1);
+      const key = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}`;
+      const itemCount =
+        invoice.displayDetails.transactions.length +
+        (invoice.displayDetails.adjustmentTotal > 0 ? 1 : 0);
+      const existing = grouped.get(key);
+
+      if (!existing) {
+        grouped.set(key, {
+          key,
+          label: getInvoiceLabel(dueDate.getMonth() + 1, dueDate.getFullYear()),
+          total: Number(invoice.displayTotal || 0),
+          invoices: [invoice],
+          itemCount,
+        });
+        return;
+      }
+
+      grouped.set(key, {
+        ...existing,
+        total: existing.total + Number(invoice.displayTotal || 0),
+        invoices: [...existing.invoices, invoice],
+        itemCount: existing.itemCount + itemCount,
+      });
+    });
+
+    return Array.from(grouped.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [futureOpenInvoicesOrdered]);
+
+  const futureOpenInvoicesSection =
+    futureMonthsSummary.length > 0 || futureInvoicesProjection.length > 0 ? (
+      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Próximos meses
+            </p>
+            <h2 className="mt-1 text-lg font-bold text-slate-950">
+              O que já está comprometido
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Use esta tela para decidir se pode comprar ou se precisa segurar o cartão.
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-rose-50 px-3 py-2 text-right">
+            <p className="text-[9px] font-bold uppercase tracking-wide text-rose-500">
+              Futuro
+            </p>
+            <p className="mt-0.5 text-base font-bold text-rose-600">
+              {formatCurrency(futureImpactTotal)}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-3">
+          <p className="text-sm font-bold text-amber-900">
+            Regra simples
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-amber-800">
+            Se o mês futuro já estiver pesado, evite novas compras no crédito. Seu foco é abrir espaço no próximo salário.
+          </p>
+        </div>
+
+        {futureMonthsSummary.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {futureMonthsSummary.map((month) => (
+              <article
+                key={month.key}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold capitalize text-slate-950">
+                      {month.label}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {month.invoices.length} fatura(s) já aberta(s) · {month.itemCount} item(ns)
+                    </p>
+                  </div>
+                  <p className="shrink-0 text-lg font-bold text-rose-600">
+                    {formatCurrency(month.total)}
+                  </p>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {month.invoices.map((invoice) => {
+                    const cardName =
+                      invoice.card?.name ||
+                      cards.find((card) => card.id === invoice.cardId)?.name ||
+                      "Cartão";
+                    const itemCount =
+                      invoice.displayDetails.transactions.length +
+                      (invoice.displayDetails.adjustmentTotal > 0 ? 1 : 0);
+
+                    return (
+                      <div
+                        key={invoice.id}
+                        className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-900">
+                            {cardName}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">
+                            Vence em {invoice.presentation.dueDateLabel} · {itemCount} item(ns)
+                          </p>
+                        </div>
+                        <p className="shrink-0 text-sm font-bold text-rose-600">
+                          {formatCurrency(Number(invoice.displayTotal))}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        {futureInvoicesProjection.length > 0 && (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-950">
+                  Parcelas e compras pós-fechamento
                 </p>
-                <p className="mt-1 text-lg font-bold text-rose-600">
-                  {formatCurrency(futureInvoicesTotal)}
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Itens que ainda vão formar próximas faturas.
                 </p>
               </div>
+              <p className="shrink-0 text-sm font-bold text-rose-600">
+                {formatCurrency(futureInvoicesTotal)}
+              </p>
             </div>
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-3 space-y-2">
               {futureInvoicesProjection.map((item) => {
                 const isProjectionExpanded = Boolean(expandedFutureProjectionIds[item.id]);
-                const visibleGroups = isProjectionExpanded ? item.groups : item.groups.slice(0, 3);
+                const visibleGroups = isProjectionExpanded ? item.groups : item.groups.slice(0, 2);
                 const hiddenGroupsCount = Math.max(item.groups.length - visibleGroups.length, 0);
 
                 return (
-                  <div
+                  <article
                     key={item.id}
-                    className="rounded-2xl border border-slate-100 bg-slate-50 p-3"
+                    className="rounded-xl bg-white px-3 py-2.5"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-slate-900">
-                          {item.label}
-                        </p>
-                        <p className="mt-0.5 text-xs text-slate-500">
-                          {item.cardName} · {item.groups.length} compra(s) · {item.transactionCount} lançamento(s)
-                        </p>
-                      </div>
-
-                      <p className="shrink-0 text-base font-bold text-rose-600">
-                        {formatCurrency(item.total)}
-                      </p>
-                    </div>
-
                     <button
                       type="button"
                       onClick={() => toggleFutureProjectionExpanded(item.id)}
-                      className="mt-3 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:bg-slate-50"
+                      className="flex w-full items-center justify-between gap-3 text-left"
                     >
-                      <span>
-                        <span className="block text-xs font-bold text-slate-800">
-                          {isProjectionExpanded ? "Ocultar descrição" : "Ver descrição dos produtos"}
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {item.label}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-slate-500">
+                          {item.cardName} · {item.groups.length} compra(s)
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-sm font-bold text-rose-600">
+                          {formatCurrency(item.total)}
+                        </p>
+                        <span className="mt-1 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700">
+                          {isProjectionExpanded ? "−" : "+"}
                         </span>
-                        <span className="mt-0.5 block text-[11px] text-slate-500">
-                          {isProjectionExpanded
-                            ? `${item.groups.length} compra(s) aberta(s)`
-                            : hiddenGroupsCount > 0
-                            ? `Mostrando 3 de ${item.groups.length} compra(s)`
-                            : `${item.groups.length} compra(s) neste mês`}
-                        </span>
-                      </span>
-                      <span className="ml-3 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                        {isProjectionExpanded ? "−" : "+"}
-                      </span>
+                      </div>
                     </button>
 
                     {isProjectionExpanded && (
-                      <div className="mt-3 space-y-2">
+                      <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
                         {visibleGroups.map((group) => (
                           <div
                             key={group.id}
-                            className="flex items-start justify-between gap-3 rounded-xl bg-white px-3 py-2"
+                            className="flex items-start justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2"
                           >
                             <div className="min-w-0">
                               <p className="truncate text-xs font-semibold text-slate-800">
@@ -826,35 +1006,41 @@ export default function InvoicesPage() {
                                   : ""}
                               </p>
                             </div>
-
                             <p className="shrink-0 text-xs font-bold text-rose-600">
                               {formatCurrency(group.totalAmount)}
                             </p>
                           </div>
                         ))}
+                        {hiddenGroupsCount > 0 && (
+                          <p className="rounded-xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                            Ainda existem mais {hiddenGroupsCount} compra(s) neste mês.
+                          </p>
+                        )}
                       </div>
                     )}
-                  </div>
+                  </article>
                 );
               })}
             </div>
-          </section>
+          </div>
+        )}
+      </section>
     ) : null;
 
   return (
-    <main className="min-h-screen bg-slate-50 px-3 py-4 md:px-8 md:py-8">
-      <div className="mx-auto w-full max-w-4xl space-y-4">
-        <header className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+    <main className="min-h-screen bg-slate-50 px-3 py-3 md:px-8 md:py-8">
+      <div className="mx-auto w-full max-w-4xl space-y-3 md:space-y-4">
+        <header className="rounded-[1.5rem] border border-slate-200 bg-white p-3 shadow-sm md:rounded-[1.75rem] md:p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400 md:text-xs">
                 Cartão de crédito
               </p>
-              <h1 className="mt-1 text-2xl font-bold text-slate-950">
+              <h1 className="mt-1 text-xl font-bold text-slate-950 md:text-2xl">
                 Faturas
               </h1>
-              <p className="mt-1 text-sm text-slate-500">
-                Visualize cada fatura como ela será paga no vencimento.
+              <p className="mt-1 text-xs text-slate-500 md:text-sm">
+                Acompanhe o que vence agora e separe o planejamento futuro.
               </p>
             </div>
 
@@ -880,37 +1066,58 @@ export default function InvoicesPage() {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <div className="rounded-2xl bg-slate-50 p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+          <div className="mt-3 grid grid-cols-3 gap-2 md:mt-4">
+            <div className="rounded-2xl bg-slate-50 p-2.5 md:p-3">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500 md:text-[10px]">
                 Em aberto
               </p>
-              <p className="mt-1 text-sm font-semibold text-slate-900 md:text-base">
-                {formatCurrency(openInvoicesTotal)}
+              <p className="mt-1 text-xs font-semibold text-slate-900 md:text-base">
+                {formatCurrency(currentInvoicesTotal)}
               </p>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                Limite usado
+            <div className="rounded-2xl bg-slate-50 p-2.5 md:p-3">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500 md:text-[10px]">
+                Usado
               </p>
-              <p className="mt-1 text-sm font-semibold text-rose-600 md:text-base">
+              <p className="mt-1 text-xs font-semibold text-rose-600 md:text-base">
                 {formatCurrency(totalUsedLimit)}
               </p>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                Disponível consciente
+            <div className="rounded-2xl bg-slate-50 p-2.5 md:p-3">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500 md:text-[10px]">
+                Próximo venc.
               </p>
-              <p
-                className={`mt-1 text-sm font-bold md:text-base ${
-                  totalAvailableLimit >= 0 ? "text-emerald-600" : "text-rose-600"
-                }`}
-              >
-                {formatCurrency(totalAvailableLimit)}
+              <p className="mt-1 text-xs font-bold text-rose-600 md:text-base">
+                {nextDueDateLabel}
               </p>
             </div>
           </div>
         </header>
+
+        <div className="sticky top-2 z-10 grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur md:static md:top-auto">
+          <button
+            type="button"
+            onClick={() => setMobileTab("current")}
+            className={`rounded-xl px-3 py-2 text-xs font-bold transition ${
+              mobileTab === "current"
+                ? "bg-slate-950 text-white"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Agora
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab("future")}
+            className={`rounded-xl px-3 py-2 text-xs font-bold transition ${
+              mobileTab === "future"
+                ? "bg-slate-950 text-white"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Futuro
+          </button>
+        </div>
 
         {loading ? (
           <div className="rounded-[1.75rem] border border-slate-200 bg-white p-6 text-center text-sm text-slate-500 shadow-sm">
@@ -920,9 +1127,15 @@ export default function InvoicesPage() {
           <div className="rounded-[1.75rem] border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
             Nenhuma fatura encontrada.
           </div>
+        ) : mobileTab === "future" ? (
+          futureOpenInvoicesSection || (
+            <div className="rounded-[1.75rem] border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+              Nenhuma fatura futura prevista.
+            </div>
+          )
         ) : (
-          <section className="space-y-4">
-            {invoicesOrdered.map((invoice, invoiceIndex) => {
+          <section className="space-y-3 md:space-y-4">
+            {currentInvoicesOrdered.map((invoice) => {
               const details = invoice.displayDetails;
               const presentation = invoice.presentation;
               const cardName =
@@ -935,187 +1148,169 @@ export default function InvoicesPage() {
               const isExpanded = Boolean(expandedInvoiceIds[invoice.id]);
 
               return (
-                <Fragment key={invoice.id}>
                 <article
-                  className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-sm"
+                  key={invoice.id}
+                  className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white shadow-sm md:rounded-[1.75rem]"
                 >
-                  <div className="p-4 md:p-5">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="truncate text-lg font-bold text-slate-950">
-                            {cardName}
-                          </h2>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${presentation.statusClass}`}
-                          >
-                            {presentation.statusLabel}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-sm font-semibold text-slate-700">
-                          {presentation.title}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {presentation.subtitle}
-                        </p>
-                        {details.hiddenAfterClosureCount > 0 && (
-                          <p className="mt-1 text-xs text-slate-400">
-                            {details.hiddenAfterClosureCount} lançamento(s) após
-                            o fechamento aparecem nas próximas faturas.
-                          </p>
-                        )}
+                  <button
+                    type="button"
+                    onClick={() => toggleInvoiceExpanded(invoice.id)}
+                    className="flex w-full items-start justify-between gap-3 p-3 text-left transition hover:bg-slate-50 md:p-5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-base font-bold text-slate-950 md:text-lg">
+                          {cardName}
+                        </h2>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold md:px-2.5 md:py-1 md:text-[11px] ${presentation.statusClass}`}
+                        >
+                          {presentation.statusLabel}
+                        </span>
                       </div>
 
-                      <div className="shrink-0 text-right">
-                        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                          Total
-                        </p>
-                        <p className="mt-1 text-2xl font-bold text-rose-600">
-                          {formatCurrency(Number(invoice.displayTotal))}
-                        </p>
+                      <p className="mt-1 truncate text-xs font-semibold text-slate-700 md:text-sm">
+                        {presentation.title}
+                      </p>
+                      <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-500 md:text-xs">
+                        {presentation.subtitle}
+                      </p>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+                        <span className="rounded-full bg-slate-100 px-2 py-1">
+                          {displayItemCount} item(ns)
+                        </span>
                       </div>
                     </div>
-                  </div>
 
-                  {invoice.status === "OPEN" && (
-                    <div className="border-y border-slate-100 bg-slate-50/80 p-4 md:p-5">
-                      <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                        Pagar com a conta
-                      </label>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
-                        <select
-                          value={selectedAccounts[invoice.id] || ""}
-                          onChange={(e) =>
-                            handleAccountChange(invoice.id, e.target.value)
-                          }
-                          className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                        >
-                          <option value="">Selecione uma conta</option>
-                          {accounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {account.name} —{" "}
-                              {formatCurrency(Number(account.balance))}
-                            </option>
-                          ))}
-                        </select>
+                    <div className="shrink-0 text-right">
+                      <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400 md:text-[10px]">
+                        Total
+                      </p>
+                      <p className="mt-1 text-lg font-bold text-rose-600 md:text-2xl">
+                        {formatCurrency(Number(invoice.displayTotal))}
+                      </p>
+                      <span className="mt-2 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                        {isExpanded ? "−" : "+"}
+                      </span>
+                    </div>
+                  </button>
 
-                        <button
-                          type="button"
-                          onClick={() => handlePayInvoice(invoice.id)}
-                          disabled={payingInvoiceId === invoice.id}
-                          className="h-12 rounded-2xl bg-sky-700 px-5 text-sm font-bold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {payingInvoiceId === invoice.id
-                            ? "Pagando..."
-                            : "Pagar"}
-                        </button>
+                  {isExpanded && (
+                    <div className="border-t border-slate-100">
+                      {invoice.status === "OPEN" && (
+                        <div className="bg-slate-50/80 p-3 md:p-5">
+                          <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                            Pagar com a conta
+                          </label>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+                            <select
+                              value={selectedAccounts[invoice.id] || ""}
+                              onChange={(e) =>
+                                handleAccountChange(invoice.id, e.target.value)
+                              }
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 md:h-12"
+                            >
+                              <option value="">Selecione uma conta</option>
+                              {accounts.map((account) => (
+                                <option key={account.id} value={account.id}>
+                                  {account.name} —{" "}
+                                  {formatCurrency(Number(account.balance))}
+                                </option>
+                              ))}
+                            </select>
+
+                            <button
+                              type="button"
+                              onClick={() => handlePayInvoice(invoice.id)}
+                              disabled={payingInvoiceId === invoice.id}
+                              className="h-11 rounded-2xl bg-sky-700 px-5 text-sm font-bold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-60 md:h-12"
+                            >
+                              {payingInvoiceId === invoice.id
+                                ? "Pagando..."
+                                : "Pagar fatura"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="p-3 md:p-5">
+                        {presentation.isClosed ? (
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-center text-xs text-slate-500 md:text-sm">
+                            Compras feitas após o fechamento já aparecem no planejamento das próximas faturas.
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mb-3 flex items-center gap-3">
+                              <h3 className="shrink-0 text-sm font-semibold text-slate-800">
+                                Lançamentos
+                              </h3>
+                              <div className="h-px flex-1 bg-slate-200" />
+                              <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                                {displayItemCount} item(ns)
+                              </span>
+                            </div>
+
+                            <div className="space-y-2">
+                              {details.adjustmentTotal > 0 && (
+                                <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-semibold text-slate-900">
+                                        Saldo anterior / ajuste inicial
+                                      </p>
+                                      <p className="text-xs text-slate-500">
+                                        Valor considerado no total desta fatura.
+                                      </p>
+                                    </div>
+                                    <p className="shrink-0 text-sm font-semibold text-slate-900">
+                                      {formatCurrency(details.adjustmentTotal)}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+
+                              {details.transactions.map((transaction) => (
+                                <div
+                                  key={transaction.id}
+                                  className="rounded-xl border border-slate-100 px-3 py-2.5"
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-semibold text-slate-900">
+                                        {transaction.title}
+                                      </p>
+                                      <p className="mt-0.5 text-xs text-slate-500">
+                                        {getInvoiceTransactionCategoryLabel(
+                                          transaction,
+                                        )}{" "}
+                                        · {formatDateBR(transaction.date)}
+                                      </p>
+                                    </div>
+                                    <p className="shrink-0 text-sm font-semibold text-rose-600">
+                                      {formatCurrency(Number(transaction.amount))}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {details.transactions.length === 0 &&
+                                details.adjustmentTotal === 0 && (
+                                  <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-center text-sm text-slate-500">
+                                    Nenhum lançamento nesta fatura.
+                                  </div>
+                                )}
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
-
-                  <div className="p-4 md:p-5">
-                    {presentation.isClosed ? (
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-center text-sm text-slate-500">
-                        Compras feitas após o fechamento já aparecem no planejamento das próximas faturas.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="mb-3 flex items-center gap-3">
-                          <h3 className="shrink-0 text-sm font-semibold text-slate-800">
-                            Lançamentos
-                          </h3>
-                          <div className="h-px flex-1 bg-slate-200" />
-                          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                            {displayItemCount} item(ns)
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleInvoiceExpanded(invoice.id)}
-                          className="mb-3 flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:bg-slate-50"
-                        >
-                          <span>
-                            <span className="block text-sm font-semibold text-slate-900">
-                              {isExpanded
-                                ? "Ocultar lançamentos"
-                                : "Ver lançamentos da fatura"}
-                            </span>
-                            <span className="mt-0.5 block text-xs text-slate-500">
-                              {displayItemCount > 0
-                                ? `${displayItemCount} item(ns) nesta fatura`
-                                : "Nenhum lançamento nesta fatura"}
-                            </span>
-                          </span>
-                          <span className="ml-3 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                            {isExpanded ? "−" : "+"}
-                          </span>
-                        </button>
-
-                        {isExpanded && (
-                          <div className="space-y-2">
-                            {details.adjustmentTotal > 0 && (
-                              <div className="rounded-xl bg-slate-50 px-3 py-2.5">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="truncate text-sm font-semibold text-slate-900">
-                                      Saldo anterior / ajuste inicial
-                                    </p>
-                                    <p className="text-xs text-slate-500">
-                                      Valor considerado no total desta fatura.
-                                    </p>
-                                  </div>
-                                  <p className="shrink-0 text-sm font-semibold text-slate-900">
-                                    {formatCurrency(details.adjustmentTotal)}
-                                  </p>
-                                </div>
-                              </div>
-                            )}
-
-                            {details.transactions.map((transaction) => (
-                              <div
-                                key={transaction.id}
-                                className="rounded-xl border border-slate-100 px-3 py-2.5"
-                              >
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="truncate text-sm font-semibold text-slate-900">
-                                      {transaction.title}
-                                    </p>
-                                    <p className="mt-0.5 text-xs text-slate-500">
-                                      {getInvoiceTransactionCategoryLabel(
-                                        transaction,
-                                      )}{" "}
-                                      · {formatDateBR(transaction.date)}
-                                    </p>
-                                  </div>
-                                  <p className="shrink-0 text-sm font-semibold text-rose-600">
-                                    {formatCurrency(Number(transaction.amount))}
-                                  </p>
-                                </div>
-                              </div>
-                            ))}
-
-                            {details.transactions.length === 0 &&
-                              details.adjustmentTotal === 0 && (
-                                <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-center text-sm text-slate-500">
-                                  Nenhum lançamento nesta fatura.
-                                </div>
-                              )}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
                 </article>
-                {invoiceIndex === 0 && futureInvoicesProjectionSection}
-                </Fragment>
               );
             })}
           </section>
         )}
-
-
       </div>
     </main>
   );

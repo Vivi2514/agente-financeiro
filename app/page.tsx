@@ -768,6 +768,7 @@ export default function DashboardPage() {
   const [initialBalanceDate, setInitialBalanceDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [initialBalanceSubmitting, setInitialBalanceSubmitting] = useState(false);
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>("agora");
+  const [showMoreDetails, setShowMoreDetails] = useState(false);
   const [quickActionModalOpen, setQuickActionModalOpen] = useState(false);
   const [supportMenuOpen, setSupportMenuOpen] = useState(false);
   const [accelerationPanelOpen, setAccelerationPanelOpen] = useState(false);
@@ -1069,6 +1070,117 @@ export default function DashboardPage() {
     const confirmed = window.confirm("Remover esta dívida da sua lista?");
     if (!confirmed) return;
     setDebts((current) => current.filter((debt) => debt.id !== id));
+  }
+
+
+
+  function handleManualPocketSave() {
+    const amountInput = window.prompt(
+      "Quanto você quer guardar no cofrinho para pagar dívida?",
+      "50,00"
+    );
+
+    if (amountInput === null) return;
+
+    const parsedAmount = parseCurrencyInput(amountInput);
+
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      showToast(
+        "Valor inválido",
+        "Digite um valor válido para guardar no cofrinho.",
+        "error"
+      );
+      return;
+    }
+
+    const safeAmount = Math.round(parsedAmount * 100) / 100;
+
+    if (safeAmount > Math.max(currentAccountsBalance, 0)) {
+      const confirmed = window.confirm(
+        `Você informou ${formatCurrency(safeAmount)}, mas seu saldo real nas contas é ${formatCurrency(currentAccountsBalance)}. Deseja guardar mesmo assim?`
+      );
+
+      if (!confirmed) return;
+    }
+
+    setCofrinho((current) => Math.round((current + safeAmount) * 100) / 100);
+    setMonthlyPocketSaved((current) => Math.round((current + safeAmount) * 100) / 100);
+
+    showToast(
+      "Dinheiro guardado",
+      `${formatCurrency(safeAmount)} foi separado no cofrinho para pagar dívida.`,
+      "success"
+    );
+  }
+
+  function handleUsePocketForDebt() {
+    if (cofrinho <= 0) {
+      showToast(
+        "Cofrinho vazio",
+        "Guarde algum valor antes de usar o cofrinho para pagar dívida.",
+        "info"
+      );
+      return;
+    }
+
+    const amountInput = window.prompt(
+      `Quanto do cofrinho você usou para pagar ${activeDebtName}?`,
+      formatCurrency(Math.min(cofrinho, activeDebtTarget))
+    );
+
+    if (amountInput === null) return;
+
+    const parsedAmount = parseCurrencyInput(amountInput);
+
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      showToast(
+        "Valor inválido",
+        "Digite um valor válido para usar na dívida.",
+        "error"
+      );
+      return;
+    }
+
+    const safeAmount = Math.min(
+      Math.round(parsedAmount * 100) / 100,
+      Math.round(cofrinho * 100) / 100,
+      Math.round(activeDebtTarget * 100) / 100
+    );
+
+    const confirmed = window.confirm(
+      `Confirmar uso de ${formatCurrency(safeAmount)} do cofrinho para pagar ${activeDebtName}?`
+    );
+
+    if (!confirmed) return;
+
+    setCofrinho((current) => Math.max(Math.round((current - safeAmount) * 100) / 100, 0));
+    setMonthlyPocketSaved((current) => Math.max(Math.round((current - safeAmount) * 100) / 100, 0));
+
+    if (currentDebt?.id) {
+      const nextTarget = Math.max(Math.round((activeDebtTarget - safeAmount) * 100) / 100, 0);
+
+      setDebts((current) =>
+        current.map((debt) =>
+          debt.id === currentDebt.id
+            ? {
+                ...debt,
+                target: nextTarget,
+                total: Math.max(Math.round((Number(debt.total || 0) - safeAmount) * 100) / 100, nextTarget),
+                status: nextTarget <= 0 ? "paid" : debt.status,
+                paidAt: nextTarget <= 0 ? new Date().toISOString() : debt.paidAt,
+              }
+            : debt
+        )
+      );
+    } else {
+      setCurrentDebtTarget((current) => Math.max(Math.round((current - safeAmount) * 100) / 100, 0));
+    }
+
+    showToast(
+      "Dívida atualizada",
+      `${formatCurrency(safeAmount)} saiu do cofrinho e foi abatido da dívida.`,
+      "success"
+    );
   }
 
   function handleOpenTransactionLauncher() {
@@ -4064,7 +4176,18 @@ export default function DashboardPage() {
         cardName: invoice.card?.name || "Cartão",
       }));
 
-    const safeToSpendToday = Math.max(0, Number(spendingCapacitySummary.safeDailySpend || 0));
+    const availableAfterCardPressure = Math.max(
+      Number(currentAccountsBalance || 0) - Number(openInvoicesTotal || 0),
+      0
+    );
+    const safeToSpendToday = Math.max(
+      0,
+      Math.min(
+        Number(spendingCapacitySummary.safeDailySpend || 0),
+        Number(spendingCapacitySummary.extraSafeSpend || 0),
+        availableAfterCardPressure
+      )
+    );
     const safeToSpendMonth = Math.max(0, Number(spendingCapacitySummary.extraSafeSpend || 0));
 
     return {
@@ -5764,11 +5887,8 @@ const dataHealthSummary = useMemo(() => {
   }, [monthlyPocketGoal, monthlyPocketSaved]);
 
   useEffect(() => {
-    if (!latestIncomeForPocketModal?.id) return;
-    if (monthlyPocketSaved >= monthlyPocketGoal) return;
-    if (lastPocketHandledIncomeId === latestIncomeForPocketModal.id) return;
-
-    setPocketSuggestionModalOpen(true);
+    // Sem pop-up automático na abertura do dashboard.
+    setPocketSuggestionModalOpen(false);
   }, [lastPocketHandledIncomeId, latestIncomeForPocketModal, monthlyPocketGoal, monthlyPocketSaved]);
 
   useEffect(() => {
@@ -5782,1529 +5902,297 @@ const dataHealthSummary = useMemo(() => {
     setDebtPayoffModalOpen(true);
   }, [currentDebt, debtForecast.isCompleted, lastPayoffPromptDebtId]);
 
+  const availableAfterCardPressure = Math.max(
+    Number(currentAccountsBalance || 0) - Number(openInvoicesTotal || 0),
+    0
+  );
+  const safeSpendToday = Math.max(
+    0,
+    Math.min(
+      Number(spendingCapacitySummary.safeDailySpend || 0),
+      Number(spendingCapacitySummary.extraSafeSpend || 0),
+      availableAfterCardPressure
+    )
+  );
+  const shouldAvoidSpending = safeSpendToday <= 0;
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 p-2 sm:p-3 md:p-8">
+    <main className="min-h-screen bg-slate-50 px-3 py-4 text-slate-950 md:px-8 md:py-8">
       {toast.visible ? (
-        <div className="pointer-events-none fixed inset-x-2 top-3 z-50 w-auto max-w-sm sm:right-4 sm:left-auto">
-          <div
-            className={`pointer-events-auto rounded-[22px] border p-4 shadow-[0_18px_50px_rgba(15,23,42,0.18)] backdrop-blur ${getToastStyles(toast.tone).container}`}
-          >
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <p className={`text-sm font-bold ${getToastStyles(toast.tone).title}`}>
-                  {toast.title}
-                </p>
-                <p className={`mt-1 text-sm leading-6 ${getToastStyles(toast.tone).text}`}>
-                  {toast.message}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setToast((current) => ({
-                    ...current,
-                    visible: false,
-                  }));
-                }}
-                className={`rounded-lg px-2 py-1 text-sm font-semibold transition ${getToastStyles(toast.tone).button}`}
-              >
-                Fechar
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {quickActionModalOpen ? (
-        <div className="fixed inset-0 z-[42] flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
-          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Ação rápida</p>
-                  <h3 className="mt-2 text-xl font-bold">O que você quer fazer agora?</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Escolha uma ação direta. O objetivo é registrar rápido, sem ficar procurando caminhos pela tela.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeQuickActionModal}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
-                >
-                  Fechar
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4 px-5 py-5">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Movimentos do dia
-                </p>
-                <div className="mt-2 grid grid-cols-1 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => goToTransactionsWithQuickMode("expense")}
-                    className="flex w-full items-center justify-between rounded-[22px] border border-rose-100 bg-rose-50/70 px-4 py-4 text-left transition hover:bg-rose-50"
-                  >
-                    <div>
-                      <p className="text-base font-bold text-slate-900">Registrar gasto agora</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Use quando o dinheiro já saiu: compra, Pix, débito ou cartão.
-                      </p>
-                    </div>
-                    <span className="text-xl text-rose-400">›</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => goToTransactionsWithQuickMode("income")}
-                    className="flex w-full items-center justify-between rounded-[22px] border border-emerald-100 bg-emerald-50/70 px-4 py-4 text-left transition hover:bg-emerald-50"
-                  >
-                    <div>
-                      <p className="text-base font-bold text-slate-900">Registrar entrada</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Salário, devolução, extra ou qualquer dinheiro que entrou.
-                      </p>
-                    </div>
-                    <span className="text-xl text-emerald-500">›</span>
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Planejamento
-                </p>
-                <div className="mt-2 grid grid-cols-1 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeQuickActionModal();
-                      router.push("/recorrentes");
-                    }}
-                    className="flex w-full items-center justify-between rounded-[22px] border border-sky-100 bg-sky-50/80 px-4 py-4 text-left transition hover:bg-sky-50"
-                  >
-                    <div>
-                      <p className="text-base font-bold text-slate-900">Compromisso mensal</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Luz, Wifi, Netflix, Uber One e contas que se repetem.
-                      </p>
-                    </div>
-                    <span className="text-xl text-sky-500">›</span>
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Proteção
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    closeQuickActionModal();
-                    handlePocketSave(pocketSuggestion);
-                  }}
-                  className="mt-2 flex w-full items-center justify-between rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left transition hover:bg-emerald-100/70"
-                >
-                  <div>
-                    <p className="text-base font-bold text-emerald-900">Guardar no cofrinho</p>
-                    <p className="mt-1 text-sm text-emerald-700">
-                      Sugestão atual: {formatCurrency(pocketSuggestion)}.
-                    </p>
-                  </div>
-                  <span className="text-xl text-emerald-600">›</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {supportMenuOpen ? (
-        <div className="fixed inset-0 z-[43] flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
-          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Menu rápido</p>
-                  <h3 className="mt-2 text-xl font-bold">O que você quer acessar?</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Use este menu para entrar nas áreas de apoio sem poluir a Home.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeSupportMenu}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
-                >
-                  Fechar
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-3 px-5 py-5">
-              <button
-                type="button"
-                onClick={() => goToDashboardTab("divida")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-amber-200 bg-amber-50 px-4 py-4 text-left transition hover:bg-amber-100/70"
-              >
-                <div>
-                  <p className="text-base font-bold text-amber-950">Dívidas</p>
-                  <p className="mt-1 text-sm text-amber-700">Ver missão, cofrinho, previsão e próximos passos.</p>
-                </div>
-                <span className="text-xl text-amber-600">›</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => goToSupportRoute("/accounts")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-              >
-                <div>
-                  <p className="text-base font-bold text-slate-900">Contas + Cartões</p>
-                  <p className="mt-1 text-sm text-slate-500">Gerenciar contas, cartões e saldos.</p>
-                </div>
-                <span className="text-xl text-slate-400">›</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => goToSupportRoute("/goals")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-              >
-                <div>
-                  <p className="text-base font-bold text-slate-900">Metas e categorias</p>
-                  <p className="mt-1 text-sm text-slate-500">Acompanhar metas do mês.</p>
-                </div>
-                <span className="text-xl text-slate-400">›</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => goToSupportRoute("/intelligence")}
-                className="flex w-full items-center justify-between rounded-[22px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-              >
-                <div>
-                  <p className="text-base font-bold text-slate-900">Inteligência financeira</p>
-                  <p className="mt-1 text-sm text-slate-500">Ver alertas e recomendações.</p>
-                </div>
-                <span className="text-xl text-slate-400">›</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {pocketSuggestionModalOpen && latestIncomeForPocketModal && pocketModalSuggestion > 0 ? (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/45 p-3 sm:items-center">
-          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Cofrinho inteligente</p>
-                  <h3 className="mt-2 text-xl font-bold">Entrou dinheiro. Guarde uma parte agora.</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    O app detectou uma entrada de {formatCurrency(getTransactionEffectiveAmount(latestIncomeForPocketModal))} e trouxe uma decisão rápida para proteger sua meta.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handlePocketModalDismiss}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
-                >
-                  Agora não
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4 px-5 py-5">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta do mês</p>
-                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Já guardado</p>
-                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
-                </div>
-                <div className="rounded-2xl bg-emerald-50 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Sugestão</p>
-                  <p className="mt-1 text-base font-bold text-emerald-700">{formatCurrency(pocketModalSuggestion)}</p>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3">
-                <p className="text-sm font-semibold text-amber-900">Se guardar agora, você protege seu plano sem deixar para depois.</p>
-                <p className="mt-1 text-sm text-amber-800">Essa decisão pode adiantar sua quitação em cerca de <span className="font-bold">{pocketModalDaysAdvanced} dia(s)</span>.</p>
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={() => handlePocketSave(pocketModalSuggestion)}
-                  className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
-                  Guardar {formatCurrency(pocketModalSuggestion)} agora
-                </button>
-                <button
-                  type="button"
-                  onClick={handlePocketModalDismiss}
-                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Decidir depois
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {debtPayoffModalOpen && currentDebt ? (
-        <div className="fixed inset-0 z-[44] flex items-end justify-center bg-slate-950/50 p-3 sm:items-center">
-          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-emerald-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-            <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 px-5 py-4 text-white">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-200">Momento de quitação</p>
-                  <h3 className="mt-2 text-xl font-bold">Você já pode quitar essa dívida</h3>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Seu cofrinho chegou no valor necessário para negociar e encerrar esta missão.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeDebtPayoffModal}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
-                >
-                  Depois
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4 px-5 py-5">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dívida</p>
-                  <p className="mt-1 text-sm font-bold text-slate-900">{currentDebt.name}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta</p>
-                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(activeDebtTarget)}</p>
-                </div>
-                <div className="rounded-2xl bg-emerald-50 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Cofrinho</p>
-                  <p className="mt-1 text-base font-bold text-emerald-700">{formatCurrency(cofrinho)}</p>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-emerald-200 bg-emerald-50 px-4 py-3">
-                <p className="text-sm font-semibold text-emerald-900">Essa é a hora de agir.</p>
-                <p className="mt-1 text-sm text-emerald-800">
-                  Ao marcar como quitada, o app encerra esta missão, usa o valor da dívida do cofrinho e muda automaticamente para a próxima menor dívida aberta.
-                </p>
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={confirmDebtPayoff}
-                  className="inline-flex flex-1 items-center justify-center rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
-                >
-                  Marcar como quitada
-                </button>
-                <button
-                  type="button"
-                  onClick={closeDebtPayoffModal}
-                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Depois
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {expenseBlockModal.open && expenseBlockModal.snapshot ? (
-        <div className="fixed inset-0 z-[45] flex items-end justify-center bg-slate-950/50 p-3 sm:items-center">
-          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-rose-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-            <div className="bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 px-5 py-4 text-white">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-rose-200">Freio ativado</p>
-                  <h3 className="mt-2 text-xl font-bold">Esse gasto pede uma decisão consciente</h3>
-                  <p className="mt-2 text-sm text-slate-300">Antes de seguir para o lançamento, o app está te mostrando o impacto real no seu plano anti-dívida.</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeExpenseGuardModal}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-white/90 transition hover:bg-white/10"
-                >
-                  Fechar
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4 px-5 py-5">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Valor</p>
-                  <p className="mt-1 text-base font-bold text-slate-900">{formatCurrency(expenseBlockModal.amount)}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Sobra hoje</p>
-                  <p className={`mt-1 text-base font-bold ${expenseBlockModal.snapshot.remainingAfterExpense >= 0 ? "text-slate-900" : "text-rose-600"}`}>
-                    {formatCurrency(expenseBlockModal.snapshot.nextAvailableToday)}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-rose-50 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Dias perdidos</p>
-                  <p className="mt-1 text-base font-bold text-rose-700">{expenseBlockModal.snapshot.daysLost} dia(s)</p>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-3">
-                <p className="text-sm font-semibold text-rose-900">Você vai zerar seu limite de hoje.</p>
-                <ul className="mt-2 space-y-1 text-sm text-rose-800">
-                  <li>• Depois dele, sobram {formatCurrency(expenseBlockModal.snapshot.nextAvailableToday)} hoje.</li>
-                  <li>• Sua missão perde cerca de {expenseBlockModal.snapshot.daysLost} dia(s).</li>
-                  {expenseBlockModal.snapshot.usesPocket ? (
-                    <li>• Ele encosta no dinheiro protegido do cofrinho.</li>
-                  ) : null}
-                </ul>
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={closeExpenseGuardModal}
-                  className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleProceedAfterExpenseGuard}
-                  className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
-                  Continuar mesmo assim
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {deleteConfirm.open ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-            <p className="text-xl font-bold tracking-tight text-slate-900">Confirmar exclusão</p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Deseja realmente excluir a recorrência <span className="font-semibold text-slate-900">{deleteConfirm.title}</span>? Essa ação não pode ser desfeita.
-            </p>
-
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={closeDeleteConfirm}
-                disabled={recurringActionId === deleteConfirm.id}
-                className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Cancelar
-              </button>
-
-              <button
-                type="button"
-                onClick={confirmDeleteRecurring}
-                disabled={recurringActionId === deleteConfirm.id}
-                className="app-button-danger disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {recurringActionId === deleteConfirm.id ? "Excluindo..." : "Excluir recorrência"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mx-auto max-w-3xl space-y-4 md:space-y-5">
-        <header className="space-y-4">
-          <section className="app-card overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50/70 to-white shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
-            <div className="flex flex-col gap-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                <div className="max-w-2xl">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Modo anti-dívida</p>
-                  <h1 className="mt-2 text-2xl font-bold leading-tight text-slate-900 md:text-3xl">
-                    Painel de decisão do dia
-                  </h1>
-                  <p className="mt-2 text-sm leading-6 text-slate-500">
-                    Veja o limite do dia, proteja o cofrinho e avance na quitação sem esforço.
-                  </p>
-                </div>
-
-                <div className="w-full md:max-w-[180px]">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Mês analisado
-                  </label>
-                  <input
-                    type="month"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="app-input mt-2 text-base placeholder:text-slate-300"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.25fr_0.95fr]">
-                <div className="rounded-[32px] border border-slate-900 bg-slate-950 p-5 text-white shadow-[0_28px_70px_rgba(15,23,42,0.26)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Disponível hoje</p>
-                      <p className={`mt-3 text-4xl font-black tracking-tight ${spendingCapacitySummary.safeDailySpend > 0 ? "text-white" : "text-rose-300"}`}>
-                        {formatCurrency(spendingCapacitySummary.safeDailySpend)}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-300">
-                        Se passar disso hoje, você atrasa sua meta.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleOpenTransactionLauncher}
-                      className="inline-flex h-12 min-w-12 items-center justify-center rounded-full bg-white/12 px-4 text-sm font-bold text-white shadow-inner transition hover:bg-white/20"
-                    >
-                      + Novo
-                    </button>
-                  </div>
-
-                  <div className="mt-5 grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl border border-white/10 bg-white/7 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Disponível real</p>
-                      <p className={`mt-2 text-xl font-bold ${availableBalanceExcludingPocket >= 0 ? "text-sky-300" : "text-rose-300"}`}>
-                        {formatCurrency(availableBalanceExcludingPocket)}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-white/7 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Faturas abertas</p>
-                      <p className="mt-2 text-xl font-bold text-white">{formatCurrency(openInvoicesTotal)}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-[32px] border border-amber-200 bg-gradient-to-br from-white via-amber-50/70 to-white p-5 shadow-[0_20px_60px_rgba(245,158,11,0.10)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Missão atual</p>
-                      <h2 className="mt-2 text-xl font-bold text-slate-900">{currentDebt ? `Quitar ${activeDebtName}` : "Cadastre sua primeira dívida"}</h2>
-                    </div>
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm">
-                      Dívida primeiro
-                    </span>
-                  </div>
-
-                  <div className="mt-4 rounded-[24px] border border-white bg-white/90 p-4 shadow-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Meta alvo</p>
-                        <p className="mt-1 text-2xl font-bold text-slate-900">{formatCurrency(activeDebtTarget)}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faltam</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(debtRemaining)}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-200">
-                      <div className="h-full rounded-full bg-slate-950 transition-all" style={{ width: `${debtProgress}%` }} />
-                    </div>
-                    <p className="mt-2 text-right text-[11px] font-semibold text-slate-500">{debtProgress.toFixed(0)}% protegido</p>
-
-                    <div className="mt-4 rounded-2xl border border-amber-200 bg-white p-3 shadow-sm">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Previsão de quitação</p>
-                      {debtForecast.isCompleted ? (
-                        <p className="mt-1 text-sm font-bold text-emerald-700">Você já tem valor suficiente para negociar essa dívida.</p>
-                      ) : (
-                        <>
-                          <p className="mt-1 text-sm font-bold text-slate-900">Nesse ritmo: {debtForecast.monthsToPay} mês(es) ou {debtForecast.daysToPay} dia(s).</p>
-                          <p className="mt-1 text-xs text-amber-800">Se guardar +R$ 50 hoje, antecipa cerca de {debtForecast.daysGainedWithFifty} dia(s).</p>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-3">
-                      <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cofrinho</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(cofrinho)}</p>
-                      </div>
-                      <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta do mês</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Guardado no mês</p>
-                      <p className="mt-1 text-sm font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handlePocketSave(pocketSuggestion)}
-                        className="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
-                      >
-                        Guardar sugestão ({formatCurrency(pocketSuggestion)})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handlePocketWithdraw}
-                        className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        Tirar do cofrinho
-                      </button>
-                      {currentDebt ? (
-                        <button
-                          type="button"
-                          onClick={() => markDebtAsPaid(currentDebt.id)}
-                          className="inline-flex items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100"
-                        >
-                          Marcar quitada
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="app-card sticky top-2 z-20 border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div className="inline-flex w-full rounded-full bg-slate-100 p-1 md:w-auto">
-                {([
-                  { key: "agora", label: "Agora" },
-                  { key: "projecao", label: "Projeção" },
-                  { key: "cartoes", label: "Cartões" },
-                  { key: "divida", label: "Dívida" },
-                ] as { key: DashboardTab; label: string }[]).map((tab) => {
-                  const active = dashboardTab === tab.key;
-                  return (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setDashboardTab(tab.key)}
-                      className={`flex-1 rounded-full px-4 py-2.5 text-sm font-semibold transition md:flex-none ${active ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                    >
-                      {tab.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                  Pagar faturas
-                </Link>
-                <Link href="/intelligence" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                  Inteligência
-                </Link>
-              </div>
-            </div>
-          </section>
-        </header>
-
-          {dashboardTab === "agora" ? (
-            <section className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_0.9fr]">
-              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                      Agora
-                    </p>
-                    <h2 className="mt-1 text-lg font-bold text-slate-900">
-                      O que fazer hoje
-                    </h2>
-                  </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      spendingCapacitySummary.safeDailySpend > 0
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-rose-100 text-rose-700"
-                    }`}
-                  >
-                    {spendingCapacitySummary.safeDailySpend > 0 ? "Com limite" : "Freio total"}
-                  </span>
-                </div>
-
-                <div className="mt-4 rounded-[26px] bg-slate-950 p-5 text-white shadow-[0_18px_45px_rgba(15,23,42,0.18)]">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                    Pode gastar hoje
-                  </p>
-                  <p className={`mt-2 text-4xl font-black tracking-tight ${spendingCapacitySummary.safeDailySpend > 0 ? "text-white" : "text-rose-300"}`}>
-                    {formatCurrency(spendingCapacitySummary.safeDailySpend)}
-                  </p>
-                  <p className="mt-2 text-sm leading-5 text-slate-300">
-                    Se passar disso hoje, você atrasa a quitação da menor dívida.
-                  </p>
-                </div>
-
-                <div className="mt-3">
-                  <button
-                    type="button"
-                    onClick={() => handlePocketSave(pocketSuggestion)}
-                    className="inline-flex min-h-[48px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50"
-                  >
-                    Guardar dinheiro no cofrinho
-                  </button>
-                </div>
-
-                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
-                  <p className="text-sm font-semibold text-amber-900">
-                    {pocketSuggestion > 0
-                      ? `Próximo passo: guardar ${formatCurrency(pocketSuggestion)} no cofrinho.`
-                      : "Meta mínima do cofrinho concluída. Agora é acelerar."}
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-amber-800">
-                    O foco é proteger o dinheiro separado e evitar gastos que encostem no cofrinho.
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                      Últimos movimentos
-                    </p>
-                    <h2 className="mt-1 text-lg font-bold text-slate-900">
-                      Só os 3 mais recentes
-                    </h2>
-                  </div>
-                  <Link href="/transactions" className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
-                    Ver extrato
-                  </Link>
-                </div>
-
-                <div className="mt-4 space-y-2">
-                  {lastTransactions.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">
-                      Nenhum movimento neste mês ainda.
-                    </div>
-                  ) : (
-                    lastTransactions.slice(0, 3).map((transaction) => {
-                      const isIncome = isIncomeType(transaction.type);
-                      const amount = getTransactionEffectiveAmount(transaction);
-                      const transactionDate = getTransactionEffectiveDate(transaction);
-
-                      return (
-                        <div
-                          key={transaction.id}
-                          className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 transition hover:bg-white"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">
-                              {transaction.title}
-                            </p>
-                            <p className="mt-0.5 truncate text-xs text-slate-500">
-                              {getCategoryLabel(transaction.category)} · {transactionDate ? new Date(transactionDate).toLocaleDateString("pt-BR") : "-"}
-                            </p>
-                          </div>
-                          <p className={`shrink-0 text-sm font-bold ${isIncome ? "text-emerald-600" : "text-rose-600"}`}>
-                            {isIncome ? "+ " : "- "}
-                            {formatCurrency(amount)}
-                          </p>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      Dívida falta
-                    </p>
-                    <p className="mt-1 text-base font-bold text-slate-900">
-                      {formatCurrency(debtRemaining)}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      Cofrinho
-                    </p>
-                    <p className="mt-1 text-base font-bold text-slate-900">
-                      {formatCurrency(cofrinho)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </section>
-          ) : null}
-        {dashboardTab === "projecao" ? (
-          <div className="space-y-4">
-        <section className="app-card">
+        <div className="fixed inset-x-3 top-3 z-50 mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-lg">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Fechamento projetado</p>
-              <h2 className="mt-1 text-lg font-bold text-slate-900">Como {formatMonthYear(selectedDate)} deve fechar</h2>
+              <p className="text-sm font-black text-slate-950">{toast.title}</p>
+              <p className="mt-1 text-sm text-slate-600">{toast.message}</p>
             </div>
-            <span
-              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                projectedMonthSummary.tone === "danger"
-                  ? "bg-rose-100 text-rose-700"
-                  : projectedMonthSummary.tone === "warning"
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-emerald-100 text-emerald-700"
-              }`}
+            <button
+              type="button"
+              onClick={() => setToast((current) => ({ ...current, visible: false }))}
+              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-bold text-slate-600"
             >
-              {projectedMonthSummary.title}
-            </span>
+              Fechar
+            </button>
           </div>
+        </div>
+      ) : null}
 
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo inicial</p>
-              <p className="mt-2 whitespace-nowrap text-base font-bold leading-tight tracking-tight text-slate-900 sm:text-lg xl:text-xl">{formatCurrency(currentAccountsBalance)}</p>
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
+        <header className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm md:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
+                Modo anti-dívida
+              </p>
+              <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-950 md:text-3xl">
+                Decisão do dia
+              </h1>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Três números para decidir rápido, sem scroll e sem pop-up.
+              </p>
             </div>
 
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Entradas previstas</p>
-              <p className="mt-2 whitespace-nowrap text-base font-bold leading-tight tracking-tight text-emerald-600 sm:text-lg xl:text-xl">{formatCurrency(projectedMonthIncomeTotal)}</p>
-            </div>
-
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saídas em conta</p>
-              <p className="mt-2 whitespace-nowrap text-base font-bold leading-tight tracking-tight text-rose-600 sm:text-lg xl:text-xl">{formatCurrency(projectedMonthCashExpensesTotal)}</p>
-            </div>
-
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Faturas do mês</p>
-              <p className="mt-2 whitespace-nowrap text-base font-bold leading-tight tracking-tight text-slate-900 sm:text-lg xl:text-xl">{formatCurrency(projectedMonthInvoiceTotal)}</p>
-            </div>
-
-            <div className="app-card-soft min-w-0 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Sobra projetada</p>
-              <p className={`mt-2 whitespace-nowrap text-base font-bold leading-tight tracking-tight sm:text-lg xl:text-xl ${projectedMonthClosingBalance >= 0 ? "text-sky-700" : "app-value-negative"}`}>{formatCurrency(projectedMonthClosingBalance)}</p>
-            </div>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(event) => setSelectedMonth(event.target.value)}
+              className="h-11 rounded-full border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 outline-none"
+            />
           </div>
+        </header>
 
-          <div
-            className={`mt-4 rounded-2xl border px-4 py-4 ${
-              projectedMonthSummary.tone === "danger"
-                ? "border-rose-200 bg-rose-50"
-                : projectedMonthSummary.tone === "warning"
-                ? "border-amber-200 bg-amber-50"
-                : "border-emerald-200 bg-emerald-50"
-            }`}
-          >
-            <p
-              className={`text-sm font-semibold ${
-                projectedMonthSummary.tone === "danger"
-                  ? "text-rose-900"
-                  : projectedMonthSummary.tone === "warning"
-                  ? "text-amber-900"
-                  : "text-emerald-900"
-              }`}
-            >
-              {projectedMonthSummary.title}
-            </p>
-            <p
-              className={`mt-1 text-sm ${
-                projectedMonthSummary.tone === "danger"
-                  ? "text-rose-800"
-                  : projectedMonthSummary.tone === "warning"
-                  ? "text-amber-800"
-                  : "text-emerald-800"
-              }`}
-            >
-              {projectedMonthSummary.message}
-            </p>
-          </div>
-
-          <div className="mt-5 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <section className="rounded-[2rem] bg-slate-950 p-5 text-white shadow-sm md:p-6">
+          <div className="flex flex-col gap-4">
+            <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Compromissos mensais</p>
-                <h3 className="mt-1 text-base font-bold text-slate-900">Custos fixos previstos para {formatMonthYear(selectedDate)}</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Aqui entram contas recorrentes como luz, internet, assinaturas e compromissos no cartão.
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
+                  Posso gastar hoje
+                </p>
+                <p className={`mt-3 text-5xl font-black tracking-tight ${shouldAvoidSpending ? "text-rose-300" : "text-white"}`}>
+                  {formatCurrency(safeSpendToday)}
                 </p>
               </div>
-              <Link href="/transactions?quickMode=future" className="app-button-secondary w-full justify-center md:w-auto">
-                Novo compromisso
+
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-black ${
+                  shouldAvoidSpending
+                    ? "bg-rose-400/15 text-rose-200"
+                    : "bg-emerald-400/15 text-emerald-200"
+                }`}
+              >
+                {shouldAvoidSpending ? "Segurar" : "Com limite"}
+              </span>
+            </div>
+
+            <p className="text-sm leading-6 text-slate-300">
+              {shouldAvoidSpending
+                ? "Melhor não comprar agora. Seu saldo real não cobre a pressão das faturas abertas."
+                : `Se passar de ${formatCurrency(safeSpendToday)} hoje, você começa a apertar o plano do mês.`}
+            </p>
+
+            <Link
+              href="/transactions"
+              className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-white px-5 text-sm font-black text-slate-950 transition hover:bg-slate-100"
+            >
+              + Lançar gasto
+            </Link>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-2 gap-3">
+          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">
+              Tenho hoje
+            </p>
+            <p className={`mt-2 text-2xl font-black ${currentAccountsBalance >= 0 ? "text-slate-950" : "text-rose-600"}`}>
+              {formatCurrency(currentAccountsBalance)}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">saldo real nas contas</p>
+          </div>
+
+          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">
+              Cartão usado
+            </p>
+            <p className="mt-2 text-2xl font-black text-rose-600">
+              {formatCurrency(openInvoicesTotal)}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">faturas abertas</p>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-2 gap-2">
+          <Link
+            href="/transactions?quickMode=income"
+            className="inline-flex h-12 items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 transition hover:bg-emerald-100"
+          >
+            Recebi dinheiro
+          </Link>
+
+          <Link
+            href="/recorrentes"
+            className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+          >
+            Paguei conta
+          </Link>
+        </section>
+
+        <button
+          type="button"
+          onClick={() => setShowMoreDetails((current) => !current)}
+          className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-900 bg-slate-900 px-4 text-sm font-black text-white transition hover:bg-slate-800"
+        >
+          {showMoreDetails ? "Ocultar detalhes" : "Ver mais detalhes"}
+        </button>
+
+        {showMoreDetails ? (
+          <section className="space-y-4">
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">
+                    Últimos movimentos
+                  </p>
+                  <h2 className="mt-1 text-lg font-black text-slate-950">
+                    Só os mais recentes
+                  </h2>
+                </div>
+
+                <Link
+                  href="/transactions"
+                  className="rounded-full border border-slate-200 px-3 py-2 text-xs font-black text-slate-600"
+                >
+                  Ver extrato
+                </Link>
+              </div>
+
+              {lastTransactions.length === 0 ? (
+                <p className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">
+                  Nenhum movimento neste mês.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {lastTransactions.map((transaction) => {
+                    const isExpense = isExpenseType(transaction.type);
+                    return (
+                      <div
+                        key={transaction.id}
+                        className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black text-slate-950">
+                            {transaction.title}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-500">
+                            {getCategoryLabel(transaction.category)} · {new Date(getTransactionEffectiveDate(transaction)).toLocaleDateString("pt-BR")}
+                          </p>
+                        </div>
+
+                        <p className={`shrink-0 text-sm font-black ${isExpense ? "text-rose-600" : "text-emerald-600"}`}>
+                          {isExpense ? "- " : "+ "}
+                          {formatCurrency(getTransactionEffectiveAmount(transaction))}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Link
+                href="/invoices"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Ver faturas do cartão
+              </Link>
+              <Link
+                href="/recorrentes"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Ver custos fixos e previsões
+              </Link>
+              <Link
+                href="/accounts"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Contas e cartões
+              </Link>
+              <Link
+                href="/simular-compra"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-center text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Simular compra
               </Link>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Previsto a pagar</p>
-                <p className="mt-1 text-lg font-bold text-rose-600">{formatCurrency(monthlyCommitmentsSummary.plannedExpensesTotal)}</p>
+            <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-amber-600">
+                    Dívida e cofrinho
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-amber-800">
+                    Guarde dinheiro quando sobrar. Use quando realmente pagar a dívida.
+                  </p>
+                </div>
+                <p className="text-xs font-black text-slate-700">
+                  {activeDebtName}
+                </p>
               </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Entradas previstas</p>
-                <p className="mt-1 text-lg font-bold text-emerald-600">{formatCurrency(monthlyCommitmentsSummary.plannedIncomesTotal)}</p>
+
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <p className="text-[10px] font-black uppercase text-slate-400">Cofrinho</p>
+                  <p className="mt-1 text-sm font-black text-slate-950">{formatCurrency(cofrinho)}</p>
+                </div>
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <p className="text-[10px] font-black uppercase text-slate-400">Meta</p>
+                  <p className="mt-1 text-sm font-black text-slate-950">{formatCurrency(activeDebtTarget)}</p>
+                </div>
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <p className="text-[10px] font-black uppercase text-slate-400">Falta</p>
+                  <p className="mt-1 text-sm font-black text-rose-600">{formatCurrency(debtRemaining)}</p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pagos no mês</p>
-                <p className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(monthlyCommitmentsSummary.paidTotal)}</p>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={handleManualPocketSave}
+                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
+                >
+                  Guardar dinheiro
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUsePocketForDebt}
+                  className="rounded-2xl border border-amber-300 bg-white px-4 py-3 text-sm font-black text-amber-800 transition hover:bg-amber-100"
+                >
+                  Usar para dívida
+                </button>
               </div>
+
+              <p className="mt-2 text-[11px] font-semibold text-amber-800">
+                Guardar aumenta o cofrinho. Usar para dívida reduz o cofrinho e abate o valor da dívida atual.
+              </p>
             </div>
 
-            {monthlyCommitments.length === 0 ? (
-              <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
-                Nenhum compromisso mensal cadastrado ainda para este mês.
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                {monthlyCommitments.map((item) => {
-                  const isIncome = isIncomeType(item.type);
-                  const statusClass = item.isPaid
-                    ? "bg-emerald-100 text-emerald-700"
-                    : item.isIgnored
-                    ? "bg-slate-100 text-slate-600"
-                    : "bg-amber-100 text-amber-700";
-
-                  return (
-                    <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="truncate text-sm font-bold text-slate-900">{item.title}</p>
-                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusClass}`}>
-                              {item.statusLabel}
-                            </span>
-                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${isIncome ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-                              {isIncome ? "Entrada" : "Saída"}
-                            </span>
-                          </div>
-                          <p className="mt-2 text-xs text-slate-500">
-                            {item.commitmentDate.toLocaleDateString("pt-BR")} · {getCategoryLabel(item.category)} · {getPaymentMethodLabel(item.paymentMethod)}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {item.card?.name ? `Cartão: ${item.card.name}` : item.account?.name ? `Conta: ${item.account.name}` : "Sem conta vinculada"}
-                            {item.realTransactionId ? ` · Transação real vinculada` : ""}
-                          </p>
-                        </div>
-
-                        <div className="flex shrink-0 items-center justify-between gap-3 md:flex-col md:items-end">
-                          <p className={`text-base font-bold ${isIncome ? "text-emerald-600" : "text-rose-600"}`}>
-                            {isIncome ? "+ " : "- "}{formatCurrency(item.amount)}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => startEditingRecurring(item)}
-                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                          >
-                            Editar
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="mt-5">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Agenda financeira</p>
-                <h3 className="mt-1 text-base font-bold text-slate-900">O que entra e vence em {formatMonthYear(selectedDate)}</h3>
-              </div>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                {projectedMonthAgenda.length} item(ns)
-              </span>
-            </div>
-
-            {projectedMonthAgenda.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
-                Ainda não há entradas, contas ou faturas previstas em {formatMonthYear(selectedDate)}.
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {projectedMonthAgenda.map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-2xl border border-slate-100 bg-white px-4 py-4"
-                  >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                              item.kind === "income"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : item.kind === "invoice"
-                                ? "bg-violet-100 text-violet-700"
-                                : "bg-rose-100 text-rose-700"
-                            }`}
-                          >
-                            {item.kind === "income"
-                              ? "Entrada"
-                              : item.kind === "invoice"
-                              ? "Fatura"
-                              : "Saída"}
-                          </span>
-                          {item.source === "recurring" && (
-                            <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
-                              Recorrência
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-2 text-xs text-slate-500">
-                          {item.date.toLocaleDateString("pt-BR")}
-                          {"subtitle" in item && item.subtitle ? ` • ${item.subtitle}` : ""}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Saldo projetado após este item: {formatCurrency(item.projectedBalanceAfter)}
-                        </p>
-                      </div>
-
-                      <p className={`text-sm font-bold md:text-base ${item.tone === "positive" ? "text-emerald-600" : "text-rose-600"}`}>
-                        {item.tone === "positive" ? "+ " : "- "}
-                        {formatCurrency(item.amount)}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {nextIncomeForecast ? (
-          <section className="app-card">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo futuro</p>
-                <h2 className="mt-1 text-lg font-bold text-slate-900">Previsão até a próxima entrada</h2>
-              </div>
-              <span
-                className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                  nextIncomeForecast.isRisky
-                    ? "bg-rose-100 text-rose-700"
-                    : "bg-indigo-100 text-indigo-700"
-                }`}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleResetAllData}
+                disabled={resettingData}
+                className="rounded-2xl border border-rose-200 bg-white px-5 py-3 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {nextIncomeForecast.isRisky ? "Atenção" : "Planejado"}
-              </span>
-            </div>
+                {resettingData ? "Resetando..." : "Resetar dados"}
+              </button>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo atual</p>
-                <p className="mt-2 text-xl font-bold text-slate-900 md:text-2xl">
-                  {formatCurrency(currentAccountsBalance)}
-                </p>
+              <div className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                <LogoutButton />
               </div>
-
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Próxima entrada</p>
-                <p className="mt-2 text-sm font-bold text-slate-900 md:text-base">
-                  {nextIncomeForecast.nextIncome.title}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {new Date(getTransactionEffectiveDate(nextIncomeForecast.nextIncome)).toLocaleDateString("pt-BR")} · {formatCurrency(nextIncomeForecast.incomeAmount)}
-                </p>
-              </div>
-
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Saldo projetado</p>
-                <p className={`mt-2 text-xl font-bold md:text-2xl ${nextIncomeForecast.projectedBalance >= 0 ? "text-indigo-700" : "app-value-negative"}`}>
-                  {formatCurrency(nextIncomeForecast.projectedBalance)}
-                </p>
-              </div>
-
-              <div className="app-card-soft min-w-0 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pode gastar até lá</p>
-                <p className={`mt-2 text-xl font-bold md:text-2xl ${nextIncomeForecast.safeToSpend > 0 ? "text-sky-700" : "app-value-negative"}`}>
-                  {formatCurrency(nextIncomeForecast.safeToSpend)}
-                </p>
-              </div>
-            </div>
-
-            <div className={`mt-3 rounded-2xl border px-4 py-4 ${nextIncomeForecast.isRisky ? "border-rose-200 bg-rose-50" : "border-indigo-200 bg-indigo-50"}`}>
-              <p className={`text-sm font-semibold ${nextIncomeForecast.isRisky ? "text-rose-900" : "text-indigo-900"}`}>
-                {nextIncomeForecast.isRisky
-                  ? `Seu caixa pode ficar negativo antes da próxima entrada.`
-                  : `Sua projeção até a próxima entrada está sob controle.`}
-              </p>
-              <p className="mt-1 text-sm text-slate-700">
-                {nextIncomeForecast.isRisky
-                  ? `O pior ponto no caminho está em ${formatCurrency(nextIncomeForecast.lowestBalance)} em ${nextIncomeForecast.lowestBalanceDate.toLocaleDateString("pt-BR")}.`
-                  : `O menor saldo no caminho é ${formatCurrency(nextIncomeForecast.lowestBalance)} em ${nextIncomeForecast.lowestBalanceDate.toLocaleDateString("pt-BR")}.`}
-              </p>
-              <p className="mt-2 text-xs leading-5 text-slate-500">
-                {nextIncomeForecast.daysUntilIncome === 0
-                  ? "A próxima entrada está prevista para hoje."
-                  : `Faltam ${nextIncomeForecast.daysUntilIncome} dia(s) para essa entrada cair.`}
-              </p>
             </div>
           </section>
         ) : null}
-          </div>
-        ) : null}
-
-
-        {dashboardTab === "divida" ? (
-          <section className="space-y-4">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.1fr_0.9fr]">
-              <article className="app-card overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50/70 to-white shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
-                <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-5 text-white">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">Missão principal</p>
-                  <h2 className="mt-2 text-2xl font-black leading-tight">{currentDebt ? `Quitar ${activeDebtName}` : "Cadastre sua primeira dívida"}</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">O app escolhe automaticamente a menor dívida aberta e mantém o foco nela até você marcar como quitada.</p>
-
-                  <div className="mt-5 grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-white/8 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Dívida alvo</p>
-                      <p className="mt-2 text-xl font-bold text-white">{formatCurrency(activeDebtTarget)}</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/8 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Faltam</p>
-                      <p className="mt-2 text-xl font-bold text-amber-200">{formatCurrency(debtRemaining)}</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
-                    <div className="h-full rounded-full bg-amber-300 transition-all" style={{ width: `${debtProgress}%` }} />
-                  </div>
-                  <p className="mt-2 text-xs text-slate-300">Progresso da missão: {debtProgress.toFixed(0)}%</p>
-
-                  <div className="mt-4 rounded-2xl border border-white/10 bg-white/8 p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-200">Previsão viva</p>
-                    {debtForecast.isCompleted ? (
-                      <p className="mt-2 text-sm font-bold text-emerald-200">Você já pode negociar essa dívida com o valor do cofrinho.</p>
-                    ) : (
-                      <>
-                        <p className="mt-2 text-base font-bold text-white">Quitação em {debtForecast.monthsToPay} mês(es)</p>
-                        <p className="mt-1 text-sm text-slate-300">ou aproximadamente {debtForecast.daysToPay} dia(s), mantendo a meta mensal de {formatCurrency(monthlyPocketGoal)}.</p>
-                        <p className="mt-2 text-sm text-amber-100">Guardar +R$ 50 hoje antecipa cerca de {debtForecast.daysGainedWithFifty} dia(s).</p>
-                      </>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setAccelerationPanelOpen((current) => !current)}
-                    className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/15"
-                  >
-                    {accelerationPanelOpen ? "Ocultar modo acelerar" : "Quero quitar mais rápido"}
-                  </button>
-                </div>
-              </article>
-
-              <article className="app-card border border-emerald-200 bg-emerald-50">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Cofrinho PicPay</p>
-                <h2 className="mt-2 text-2xl font-black text-slate-900">{formatCurrency(cofrinho)}</h2>
-                <p className="mt-2 text-sm leading-6 text-emerald-800">Dinheiro separado mentalmente. Mesmo estando na mesma conta, ele não deve entrar no seu disponível do dia.</p>
-
-                <div className="mt-5 grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-white/80 p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta mensal</p>
-                    <p className="mt-2 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketGoal)}</p>
-                  </div>
-                  <div className="rounded-2xl bg-white/80 p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Guardado no mês</p>
-                    <p className="mt-2 text-lg font-bold text-slate-900">{formatCurrency(monthlyPocketSaved)}</p>
-                  </div>
-                </div>
-
-                <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={() => handlePocketSave(pocketSuggestion)}
-                    className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800"
-                  >
-                    Guardar sugestão
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleOpenTransactionLauncher}
-                    className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Ações rápidas
-                  </button>
-                </div>
-              </article>
-            </div>
-
-            {accelerationPanelOpen ? (
-              <section className="app-card border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Modo acelerar</p>
-                    <h3 className="mt-2 text-xl font-black text-slate-900">Escolha um ritmo sem poluir a Home</h3>
-                    <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
-                      Estes cenários ficam só na área de Dívidas. A Home continua limpa para decisões rápidas do dia.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAccelerationPanelOpen(false)}
-                    className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                  >
-                    Fechar
-                  </button>
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-                  {accelerationScenarios.map((scenario) => (
-                    <article
-                      key={scenario.id}
-                      className={`rounded-3xl border p-4 ${
-                        scenario.highlight
-                          ? "border-amber-200 bg-amber-50"
-                          : "border-slate-200 bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            {scenario.extraMonthly > 0 ? `+ ${formatCurrency(scenario.extraMonthly)}/mês` : "Sem aperto extra"}
-                          </p>
-                          <h4 className="mt-1 text-base font-black text-slate-900">{scenario.label}</h4>
-                        </div>
-                        {scenario.highlight ? (
-                          <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-amber-700 shadow-sm">
-                            sugerido
-                          </span>
-                        ) : null}
-                      </div>
-
-                      <p className="mt-3 text-sm leading-5 text-slate-600">{scenario.description}</p>
-
-                      <div className="mt-4 rounded-2xl bg-white/85 p-3 shadow-sm">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Meta mensal</p>
-                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(scenario.monthlyTotal)}</p>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <div className="rounded-2xl bg-white/70 p-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quita em</p>
-                          <p className="mt-1 text-sm font-black text-slate-900">{scenario.monthsToPay} mês(es)</p>
-                        </div>
-                        <div className="rounded-2xl bg-white/70 p-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dias</p>
-                          <p className="mt-1 text-sm font-black text-slate-900">{scenario.daysToPay}</p>
-                        </div>
-                      </div>
-
-                      <p className="mt-3 text-sm font-semibold text-slate-700">
-                        {scenario.daysGained > 0
-                          ? `Você ganha cerca de ${scenario.daysGained} dia(s).`
-                          : "Este é o ritmo atual do plano."}
-                      </p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-
-            <section className="app-card border border-slate-200 bg-white">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Plano automático</p>
-                  <h3 className="mt-2 text-xl font-black text-slate-900">Fila de dívidas</h3>
-                  <p className="mt-1 text-sm text-slate-500">Cadastre apenas o valor real para quitar. A menor dívida aberta vira a missão atual automaticamente.</p>
-                </div>
-
-                <form onSubmit={handleAddDebt} className="w-full space-y-3 lg:max-w-lg">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                      Nome
-                    </label>
-                    <input
-                      type="text"
-                      value={debtNameInput}
-                      onChange={(event) => setDebtNameInput(event.target.value)}
-                      placeholder="Nome da dívida"
-                      className="app-input w-full"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
-                    <label className="min-w-0">
-                      <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                        Quitar
-                      </span>
-                      <div className="flex min-h-[52px] items-center rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition focus-within:border-sky-300 focus-within:ring-4 focus-within:ring-sky-100">
-                        <span className="mr-2 text-sm font-semibold text-slate-500">R$</span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={debtTargetInput}
-                          onChange={(event) => setDebtTargetInput(event.target.value)}
-                          onFocus={() => {
-                            if (!debtTargetInput.trim()) setDebtTargetInput("");
-                          }}
-                          placeholder="0,00"
-                          className="w-full bg-transparent text-sm font-semibold text-slate-900 outline-none placeholder:text-slate-400"
-                        />
-                      </div>
-                    </label>
-
-                    <button type="submit" className="self-end rounded-2xl bg-sky-700 px-5 py-4 text-sm font-black text-white shadow-sm transition hover:bg-sky-800">
-                      Adicionar
-                    </button>
-                  </div>
-                </form>
-              </div>
-
-              <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-                {openDebts.length > 0 ? (
-                  openDebts.map((debt, index) => (
-                    <div
-                      key={debt.id}
-                      className={`rounded-3xl border p-4 ${index === 0 ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            {index === 0 ? "Missão atual" : "Próxima da fila"}
-                          </p>
-                          <h4 className="mt-1 text-base font-black text-slate-900">{debt.name}</h4>
-                        </div>
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
-                          #{index + 1}
-                        </span>
-                      </div>
-
-                      <div className="mt-4 rounded-2xl bg-white/80 p-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Valor para quitar</p>
-                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(debt.target)}</p>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => markDebtAsPaid(debt.id)}
-                          className="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
-                        >
-                          Marcar quitada
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeDebt(debt.id)}
-                          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500 md:col-span-2">
-                    Cadastre uma dívida para o app escolher automaticamente sua próxima missão.
-                  </div>
-                )}
-              </div>
-
-              {paidDebts.length > 0 ? (
-                <div className="mt-5 rounded-3xl border border-emerald-200 bg-emerald-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Quitadas</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {paidDebts.map((debt) => (
-                      <button
-                        key={debt.id}
-                        type="button"
-                        onClick={() => reopenDebt(debt.id)}
-                        className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-emerald-800 shadow-sm"
-                      >
-                        {debt.name} · {formatCurrency(debt.target)} · reabrir
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </section>
-
-            <section className="app-card border border-slate-200 bg-white">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ritmo mínimo</p>
-                  <p className="mt-2 text-xl font-bold text-slate-900">{formatCurrency(Math.max(monthlyPocketGoal / 30, 1))}/dia</p>
-                  <p className="mt-1 text-sm text-slate-500">Referência diária para bater a meta mensal.</p>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Falta da meta mensal</p>
-                  <p className="mt-2 text-xl font-bold text-slate-900">{formatCurrency(Math.max(monthlyPocketGoal - monthlyPocketSaved, 0))}</p>
-                  <p className="mt-1 text-sm text-slate-500">Prioridade antes de qualquer gasto extra.</p>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Regra do dia</p>
-                  <p className="mt-2 text-sm font-bold text-slate-900">Se não for necessário, não lança.</p>
-                  <p className="mt-1 text-sm text-slate-500">O freio existe para proteger a quitação.</p>
-                </div>
-              </div>
-            </section>
-          </section>
-        ) : null}
-
-        {dashboardTab === "cartoes" ? (
-          <section className="space-y-4">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div className="app-card-soft p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Faturas abertas</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(openInvoicesTotal)}</p>
-                <p className="mt-2 text-sm text-slate-500">Total em aberto nos cartões neste momento.</p>
-              </div>
-
-              <div className="app-card-soft p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Compras do mês</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(selectedMonthCreditPurchasesTotal)}</p>
-                <p className="mt-2 text-sm text-slate-500">Valor lançado no cartão dentro do mês filtrado.</p>
-              </div>
-
-              <div className="app-card-soft p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Saldo anterior</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(cardPreviousBalanceTotal)}</p>
-                <p className="mt-2 text-sm text-slate-500">Parte das faturas que já vinha de meses anteriores.</p>
-              </div>
-            </div>
-
-            <section className="app-card">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Visão rápida</p>
-                  <h2 className="mt-1 text-lg font-bold text-slate-900">Faturas em destaque</h2>
-                </div>
-                <Link href="/invoices" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                  Abrir faturas
-                </Link>
-              </div>
-
-              {openInvoices.length === 0 ? (
-                <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
-                  Você não tem faturas abertas agora.
-                </div>
-              ) : (
-                <div className="mt-4 flex snap-x gap-3 overflow-x-auto pb-1">
-                  {openInvoices.map((invoice) => (
-                    <article key={invoice.id} className="min-w-[280px] snap-start rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{invoice.card?.name || "Cartão"}</p>
-                          <p className="mt-1 text-xs text-slate-500">{formatInvoiceLabel(invoice.month, invoice.year)}</p>
-                        </div>
-                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${invoice.closedAt ? "bg-slate-900 text-white" : invoice.status === "OPEN" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-                          {invoice.closedAt ? "Fechada" : invoice.status === "OPEN" ? "Aberta" : "Paga"}
-                        </span>
-                      </div>
-
-                      <p className="mt-5 text-2xl font-bold text-slate-900">{formatCurrency(getInvoiceDisplayTotal(invoice))}</p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {invoice.dueDate ? `Vence em ${new Date(invoice.dueDate).toLocaleDateString("pt-BR")}` : "Sem vencimento informado"}
-                      </p>
-                      {invoice.closedAt ? (
-                        <p className="mt-2 rounded-2xl bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
-                          Fechada manualmente em {new Date(invoice.closedAt || "").toLocaleDateString("pt-BR")}. Compras depois dessa data vão para a próxima fatura.
-                        </p>
-                      ) : null}
-
-                      <div className="mt-5 flex flex-wrap gap-2">
-                        <Link href="/invoices" className="inline-flex flex-1 items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800">
-                          Pagar
-                        </Link>
-                        {invoice.closedAt ? (
-                          <button
-                            type="button"
-                            onClick={() => handleReopenManuallyClosedInvoice(invoice.id)}
-                            className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                          >
-                            Reabrir
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleMarkInvoiceManuallyClosed(invoice)}
-                            className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                          >
-                            Fechar
-                          </button>
-                        )}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="app-card">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Parcelas futuras</p>
-                  <h2 className="mt-1 text-lg font-bold text-slate-900">O que ainda vem pela frente</h2>
-                </div>
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  {futureInstallmentsByMonth.length} mês(es)
-                </span>
-              </div>
-
-              {futureInstallmentsByMonth.length === 0 ? (
-                <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
-                  Não há parcelas futuras previstas no momento.
-                </div>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  {futureInstallmentsByMonth.map((group) => (
-                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{group.label}</p>
-                          <p className="mt-1 text-xs text-slate-500">{group.count} compra(s) parcelada(s)</p>
-                        </div>
-                        <div className="text-left sm:text-right">
-                          <p className="text-sm font-bold text-slate-900">{formatCurrency(group.total)}</p>
-                          <p className={`mt-1 text-xs ${group.projectedBalance >= 0 ? "text-slate-500" : "text-rose-600"}`}>
-                            Saldo após esse mês: {formatCurrency(group.projectedBalance)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </section>
-        ) : null}
-
-        <section className="flex justify-center">
-          <button
-            type="button"
-            onClick={openSupportMenu}
-            className="group flex items-center gap-3 rounded-[24px] border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-950 text-2xl font-semibold leading-none text-white shadow-lg transition group-hover:scale-105">
-              +
-            </span>
-            <span>
-              <span className="block text-sm font-bold text-slate-900">Mais opções</span>
-              <span className="mt-0.5 block text-xs text-slate-500">Dívidas, contas, metas e inteligência.</span>
-            </span>
-          </button>
-        </section>
-
-        <section className="flex flex-wrap items-center justify-start gap-3">
-          <button
-            type="button"
-            onClick={handleResetAllData}
-            disabled={resettingData}
-            className="rounded-2xl border border-rose-200 bg-white px-5 py-3 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {resettingData ? "Resetando..." : "Resetar dados"}
-          </button>
-
-          <div className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-            <LogoutButton />
-          </div>
-        </section>
       </div>
     </main>
   );

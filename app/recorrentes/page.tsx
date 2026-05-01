@@ -131,6 +131,26 @@ function normalizeType(value?: string | null) {
   return "expense";
 }
 
+function getRecurringActionLabel(type?: string | null) {
+  return normalizeType(type) === "income" ? "Receber" : "Pagar";
+}
+
+function getRecurringConfirmLabel(type?: string | null) {
+  return normalizeType(type) === "income"
+    ? "Confirmar recebimento"
+    : "Confirmar pagamento";
+}
+
+function getRecurringDoneLabel(type?: string | null) {
+  return normalizeType(type) === "income" ? "Recebido" : "Pago";
+}
+
+function getRecurringAmountQuestion(type?: string | null, title?: string | null) {
+  return normalizeType(type) === "income"
+    ? `Qual foi o valor recebido de ${title || "esta entrada"}?`
+    : `Qual foi o valor pago de ${title || "esta saída"}?`;
+}
+
 function getPaymentMethodLabel(method?: string | null) {
   switch (method) {
     case "cash":
@@ -459,15 +479,15 @@ export default function RecorrentesPage() {
     }
   }
 
-  async function payRecurring(item: RecurringTransaction) {
+  async function confirmRecurring(item: RecurringTransaction) {
     if (item.status === "PAID" || item.isPaid) {
-      showFeedback("info", "Esse compromisso já está marcado como pago neste mês.");
+      showFeedback("info", `Esse compromisso já está marcado como ${getRecurringDoneLabel(item.type).toLowerCase()} neste mês.`);
       return;
     }
 
     const suggestedAmount = formatAmountForInput(Number(item.amount || 0));
     const amountInput = window.prompt(
-      `Qual foi o valor pago de ${item.title}?`,
+      getRecurringAmountQuestion(item.type, item.title),
       suggestedAmount,
     );
 
@@ -476,7 +496,7 @@ export default function RecorrentesPage() {
     const paidAmount = parseCurrencyInput(amountInput);
 
     if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
-      showFeedback("error", "Informe um valor pago válido.");
+      showFeedback("error", `Informe um valor ${normalizeType(item.type) === "income" ? "recebido" : "pago"} válido.`);
       return;
     }
 
@@ -489,7 +509,7 @@ export default function RecorrentesPage() {
     ).padStart(2, "0")}`;
 
     const confirmed = window.confirm(
-      `Confirmar pagamento de ${item.title} em ${paymentDate} no valor de ${formatCurrency(
+      `${getRecurringConfirmLabel(item.type)} de ${item.title} em ${paymentDate} no valor de ${formatCurrency(
         paidAmount,
       )}?`,
     );
@@ -525,18 +545,18 @@ export default function RecorrentesPage() {
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(data?.error || "Não foi possível registrar o pagamento.");
+        throw new Error(data?.error || `Não foi possível registrar ${normalizeType(item.type) === "income" ? "o recebimento" : "o pagamento"}.`);
       }
 
       await loadData();
       showFeedback(
         "success",
-        `Pagamento de ${item.title} registrado em ${formatCurrency(paidAmount)}.`,
+        `${getRecurringDoneLabel(item.type)}: ${item.title} registrado em ${formatCurrency(paidAmount)}.`,
       );
     } catch (error) {
       showFeedback(
         "error",
-        error instanceof Error ? error.message : "Erro ao registrar pagamento.",
+        error instanceof Error ? error.message : `Erro ao registrar ${normalizeType(item.type) === "income" ? "recebimento" : "pagamento"}.`,
       );
     } finally {
       setActionId(null);
@@ -563,8 +583,7 @@ export default function RecorrentesPage() {
                 Custos fixos e previsões
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-                Cadastre luz, internet, assinaturas e contas recorrentes uma vez.
-                Depois acompanhe o custo previsto dos próximos meses.
+                Cadastre contas fixas, salário e vale alimentação uma vez. Depois confirme o valor real quando pagar ou receber.
               </p>
             </div>
 
@@ -658,7 +677,7 @@ export default function RecorrentesPage() {
                   {editingId ? "Editar compromisso" : "Cadastrar fixo"}
                 </h2>
                 <p className="mt-1 text-sm leading-5 text-slate-500">
-                  Use para contas que se repetem mês a mês.
+                  Use para saídas e entradas que se repetem mês a mês.
                 </p>
               </div>
 
@@ -771,7 +790,7 @@ export default function RecorrentesPage() {
 
               <div>
                 <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Forma de pagamento
+                  {form.type === "income" ? "Forma de recebimento" : "Forma de pagamento"}
                 </label>
                 <select
                   value={form.paymentMethod}
@@ -818,7 +837,7 @@ export default function RecorrentesPage() {
               ) : form.paymentMethod !== "voucher" ? (
                 <div>
                   <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
-                    Conta
+                    {form.type === "income" ? "Conta de recebimento" : "Conta"}
                   </label>
                   <select
                     value={form.accountId}
@@ -903,7 +922,7 @@ export default function RecorrentesPage() {
                   Nenhum compromisso cadastrado ainda.
                 </p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Cadastre Luz, Wifi, Netflix ou qualquer custo fixo no formulário ao lado.
+                  Cadastre Luz, Wifi, Salário, Vale alimentação ou qualquer previsão recorrente no formulário ao lado.
                 </p>
               </div>
             ) : (
@@ -913,7 +932,7 @@ export default function RecorrentesPage() {
                   const isPaid = item.status === "PAID" || item.isPaid;
                   const isIgnored = item.status === "IGNORED";
                   const statusLabel = isPaid
-                    ? "Pago"
+                    ? getRecurringDoneLabel(type)
                     : isIgnored
                     ? "Ignorado"
                     : item.active
@@ -980,10 +999,10 @@ export default function RecorrentesPage() {
                               <button
                                 type="button"
                                 disabled={actionId === item.id}
-                                onClick={() => payRecurring(item)}
+                                onClick={() => confirmRecurring(item)}
                                 className="rounded-full bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60"
                               >
-                                Pagar
+                                {getRecurringActionLabel(type)}
                               </button>
                             )}
                             <button
