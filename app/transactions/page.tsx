@@ -460,8 +460,7 @@ function suggestIncomeCategoryFromTitle(title: string) {
 }
 
 export default function TransactionsPage() {
-  const amountInputRef = useRef<HTMLInputElement | null>(null);
-  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const quickInputRef = useRef<HTMLInputElement | null>(null);
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -618,8 +617,7 @@ export default function TransactionsPage() {
     }
 
     window.setTimeout(() => {
-      amountInputRef.current?.focus();
-      amountInputRef.current?.select();
+      quickInputRef.current?.focus();
     }, 150);
   }, []);
 
@@ -1291,8 +1289,7 @@ export default function TransactionsPage() {
 
       resetTransactionForm();
       window.setTimeout(() => {
-        amountInputRef.current?.focus();
-        amountInputRef.current?.select();
+        quickInputRef.current?.focus();
       }, 100);
       await loadData();
     } catch (error) {
@@ -1665,6 +1662,8 @@ export default function TransactionsPage() {
   const isHighDecisionPressure = decisionPressureLevel === "high";
   const isMediumDecisionPressure = decisionPressureLevel === "medium";
 
+  const { amount: quickPreviewAmount } = extractQuickInputParts(quickInput);
+
   return (
     <main className="min-h-screen bg-[#F8FAFC] px-3 py-4 text-[#172033] md:px-8 md:py-8">
       <div className="mx-auto max-w-7xl space-y-5">
@@ -1752,6 +1751,7 @@ export default function TransactionsPage() {
                     Lançamento inteligente
                   </label>
                   <input
+                    ref={quickInputRef}
                     type="text"
                     value={quickInput}
                     onChange={(e) => handleQuickInputChange(e.target.value)}
@@ -1767,34 +1767,14 @@ export default function TransactionsPage() {
                   <p className="mt-2 text-xs font-medium text-slate-500">
                     Digite nome + valor. Ex: <span className="font-semibold text-slate-700">uber 25</span>. A categoria e o valor são preenchidos automaticamente.
                   </p>
+                  {quickPreviewAmount > 0 && (
+                    <p className="mt-2 text-sm font-semibold text-[#059669]">
+                      💰 {formatCurrency(quickPreviewAmount)}
+                    </p>
+                  )}
                 </div>
 
-                <div className="mt-4 rounded-[1.7rem] border border-[#E5EAF2] bg-white p-4 text-[#172033] shadow-inner shadow-slate-100/60">
-                  <label className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-400">
-                    Valor
-                  </label>
-                  <input
-                    ref={amountInputRef}
-                    type="text"
-                    inputMode="numeric"
-                    value={amountInput}
-                    onChange={(e) => setAmountInput(formatCurrencyInput(e.target.value))}
-                    placeholder="R$ 0,00"
-                    className="mt-1 w-full border-0 bg-transparent text-4xl font-bold tracking-tight text-[#172033] outline-none placeholder:text-slate-300"
-                  />
-                  <input
-                    ref={titleInputRef}
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder={
-                      specialType === "card_adjustment"
-                        ? "Ex: Ajuste inicial do cartão"
-                        : "Ex: Uber, mercado, salário..."
-                    }
-                    className="mt-3 w-full rounded-2xl border border-[#E5EAF2] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold text-[#172033] outline-none placeholder:text-slate-400 focus:border-[#93C5FD]"
-                  />
-                </div>
+                
               </div>
 
               <div className="space-y-4 border-t border-slate-100 bg-white p-4 md:p-5">
