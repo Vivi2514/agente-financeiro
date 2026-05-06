@@ -1845,6 +1845,21 @@ export default function DashboardPage() {
     );
   }, [creditCardMonthTransactions]);
 
+  const selectedMonthVoucherBalance = useMemo(() => {
+    return realizedMonthTransactions
+      .filter((transaction) => {
+        const paymentMethod = normalizeComparableText(transaction.paymentMethod);
+        const category = normalizeComparableText(transaction.category);
+        return paymentMethod === "voucher" || category === "vale alimentação";
+      })
+      .reduce((sum, transaction) => {
+        const amount = getTransactionEffectiveAmount(transaction);
+        if (isIncomeType(transaction.type)) return sum + amount;
+        if (isExpenseType(transaction.type)) return sum - amount;
+        return sum;
+      }, 0);
+  }, [realizedMonthTransactions]);
+
   const filteredExpenses = useMemo(() => {
     return analyticalTransactions.filter((transaction) =>
       isExpenseType(transaction.type)
@@ -5939,13 +5954,20 @@ const dataHealthSummary = useMemo(() => {
     ? "warning"
     : "success";
 
-  const firstPriority = safeBalance <= 0
-    ? "Não fazer compra nova agora. Primeiro quite as faturas e os custos fixos que já estão pendentes."
-    : safeSpendToday <= 50
-    ? "Gastar só com necessidade real hoje, porque a margem segura está pequena."
-    : hasCreditCardUsageThisMonth
-    ? "Evitar aumentar o cartão. O foco é atravessar o mês com dinheiro vivo."
-    : "Manter o ritmo e gastar só dentro da margem segura.";
+  const safeAvailableToday = Number(currentAccountsBalance || 0);
+
+  const isCardAboveIdealLimit = monthlyCardLimit > 0
+    ? selectedMonthCreditPurchasesTotal > monthlyCardLimit
+    : selectedMonthCreditPurchasesTotal > 0;
+
+  const cardLimitProgress = monthlyCardLimit > 0
+    ? Math.min(
+        Math.max((selectedMonthCreditPurchasesTotal / monthlyCardLimit) * 100, 0),
+        100
+      )
+    : 0;
+
+  const homeStatusMessage = "⚠️ Você ainda possui contas e faturas abertas";
 
   const monthDecision = shouldAvoidSpending
     ? {
@@ -6028,13 +6050,13 @@ const dataHealthSummary = useMemo(() => {
                 </span>
 
                 <h2 className="mt-5 text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                  Saldo seguro do mês
+                  Dinheiro na conta
                 </h2>
                 <p className={`mt-2 text-5xl font-black tracking-tight md:text-6xl ${decisionValueClasses}`}>
-                  {formatCurrency(safeBalance)}
+                  {formatCurrency(safeAvailableToday)}
                 </p>
                 <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-                  {monthDecision.detail}
+                  Valor real nas contas cadastradas
                 </p>
               </div>
 
@@ -6046,45 +6068,50 @@ const dataHealthSummary = useMemo(() => {
               </Link>
             </div>
 
-            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+            <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4">
               <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                Por que essa decisão?
+                Vale alimentação
               </p>
-
-              <div className="mt-4 space-y-3 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-600">Tenho nas contas</span>
-                  <span className="font-black text-slate-950">{formatCurrency(currentAccountsBalance)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-600">Faturas para pagar</span>
-                  <span className="font-black text-rose-600">- {formatCurrency(openInvoicesTotal)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-600">Fixos pendentes</span>
-                  <span className="font-black text-rose-600">- {formatCurrency(fixedPendingExpensesTotal)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-600">Cofrinho protegido</span>
-                  <span className="font-black text-slate-700">- {formatCurrency(protectedPocketTotal)}</span>
-                </div>
-                <div className="border-t border-slate-200 pt-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-black text-slate-950">Resultado seguro</span>
-                    <span className={`font-black ${safeBalance >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                      {formatCurrency(safeBalance)}
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <p
+                className={`mt-2 text-2xl font-black ${
+                  selectedMonthVoucherBalance >= 0 ? "text-slate-950" : "text-rose-600"
+                }`}
+              >
+                {formatCurrency(selectedMonthVoucherBalance)}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Saldo disponível no benefício
+              </p>
             </div>
 
             <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4">
               <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                Prioridade agora
+                Cartão do mês
               </p>
-              <p className="mt-2 text-base font-black text-slate-950">
-                {firstPriority}
+              <p className="mt-2 text-2xl font-black text-slate-950">
+                {formatCurrency(selectedMonthCreditPurchasesTotal)}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Total usado no crédito neste mês
+              </p>
+              <p className="mt-3 text-xs font-black text-slate-600">
+                Limite ideal: {formatCurrency(monthlyCardLimit)}
+              </p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${isCardAboveIdealLimit ? "bg-rose-500" : "bg-emerald-500"}`}
+                  style={{ width: `${cardLimitProgress}%` }}
+                />
+              </div>
+            </div>
+
+            <div
+              className="rounded-[1.5rem] border border-amber-200 bg-amber-50 p-4"
+            >
+              <p
+                className="text-sm font-black text-amber-900"
+              >
+                {homeStatusMessage}
               </p>
             </div>
           </div>

@@ -784,6 +784,10 @@ export default function TransactionsPage() {
     return totalIncome - totalExpense;
   }, [totalIncome, totalExpense]);
 
+  const currentAccountsBalance = useMemo(() => {
+    return accounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
+  }, [accounts]);
+
   const filteredTransactions = useMemo(() => {
     return [...transactions]
       .filter((transaction) => {
@@ -1681,29 +1685,16 @@ export default function TransactionsPage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 rounded-[1.5rem] border border-[#E5EAF2] bg-[#F8FAFC] p-2 md:min-w-[420px]">
+            <div className="rounded-[1.5rem] border border-[#E5EAF2] bg-[#F8FAFC] p-3 md:min-w-[320px]">
               <div className="rounded-2xl bg-white p-3 text-[#172033]">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                  Entradas
+                  Dinheiro na conta
                 </p>
-                <p className="mt-1 text-sm font-semibold text-[#059669] md:text-base">
-                  {formatCurrency(totalIncome)}
+                <p className="mt-1 text-sm font-semibold text-[#0F172A] md:text-base">
+                  {formatCurrency(currentAccountsBalance)}
                 </p>
-              </div>
-              <div className="rounded-2xl bg-white p-3 text-[#172033]">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                  Saídas
-                </p>
-                <p className="mt-1 text-sm font-semibold text-[#E11D48] md:text-base">
-                  {formatCurrency(totalExpense)}
-                </p>
-              </div>
-              <div className="rounded-2xl bg-white p-3 text-[#172033]">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                  Saldo
-                </p>
-                <p className={`mt-1 text-sm font-semibold md:text-base ${balance >= 0 ? "text-[#0F172A]" : "text-[#E11D48]"}`}>
-                  {formatCurrency(balance)}
+                <p className="mt-1 text-xs text-slate-500">
+                  Valor real nas contas cadastradas
                 </p>
               </div>
             </div>
