@@ -5933,7 +5933,18 @@ const dataHealthSummary = useMemo(() => {
         (item) => normalizeComparableText(item.paymentMethod) !== "credit_card"
       )
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const creditCardInvoices = Number(openInvoicesTotal || 0);
+    const creditCardInvoices = invoices
+      .filter(
+        (invoice) =>
+          invoice.month === selectedMonthMeta.month &&
+          invoice.year === selectedMonthMeta.year &&
+          invoice.status !== "PAID"
+      )
+      .reduce(
+        (sum, invoice) =>
+          sum + Number(invoiceDisplayTotals[invoice.id] ?? invoice.total ?? 0),
+        0
+      );
     const realMonthResult =
       expectedIncomes - nonCardFixedExpenses - creditCardInvoices;
 
@@ -5944,9 +5955,12 @@ const dataHealthSummary = useMemo(() => {
       realMonthResult,
     };
   }, [
+    invoiceDisplayTotals,
+    invoices,
     monthlyRecurringProjection.fixedPendingExpenseItems,
-    openInvoicesTotal,
     projectedMonthIncomeTotal,
+    selectedMonthMeta.month,
+    selectedMonthMeta.year,
   ]);
   const protectedPocketTotal = Number(cofrinho || 0);
 
@@ -6180,7 +6194,7 @@ const dataHealthSummary = useMemo(() => {
 
               <div className="rounded-3xl border border-rose-100 bg-rose-50 p-4">
                 <p className="text-xs font-black uppercase tracking-[0.16em] text-rose-400">
-                  Faturas do cartão
+                  Fatura do mês
                 </p>
                 <p className="mt-2 text-xl font-black text-rose-700">
                   {formatCurrency(monthlyRealResultSummary.creditCardInvoices)}
