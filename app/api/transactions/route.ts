@@ -223,7 +223,6 @@ async function getInvoiceStartOffsetForCreditPurchase(
   }
 ) {
   const { userId, cardId, purchaseDate } = params;
-  const purchaseDay = startOfDay(purchaseDate);
   const purchaseMonth = purchaseDate.getMonth() + 1;
   const purchaseYear = purchaseDate.getFullYear();
 
@@ -241,7 +240,7 @@ async function getInvoiceStartOffsetForCreditPurchase(
     },
   });
 
-  if (!currentInvoice?.closedAt) {
+  if (!currentInvoice) {
     return 0;
   }
 
@@ -249,9 +248,7 @@ async function getInvoiceStartOffsetForCreditPurchase(
     return 1;
   }
 
-  const closedDay = startOfDay(currentInvoice.closedAt);
-
-  if (purchaseDay.getTime() > closedDay.getTime()) {
+  if (currentInvoice.closedAt) {
     return 1;
   }
 

@@ -530,6 +530,9 @@ export default function InvoicesPage() {
     Record<string, string>
   >({});
   const [payingInvoiceId, setPayingInvoiceId] = useState<string | null>(null);
+  const [updatingClosureInvoiceId, setUpdatingClosureInvoiceId] = useState<
+    string | null
+  >(null);
   const [expandedInvoiceIds, setExpandedInvoiceIds] = useState<
     Record<string, boolean>
   >({});
@@ -646,6 +649,62 @@ export default function InvoicesPage() {
       );
     } finally {
       setPayingInvoiceId(null);
+    }
+  }
+
+  async function handleCloseInvoice(invoiceId: string) {
+    try {
+      setUpdatingClosureInvoiceId(invoiceId);
+
+      const response = await fetch(`/api/invoices/${invoiceId}/close`, {
+        method: "PATCH",
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Erro ao fechar fatura");
+      }
+
+      alert("Fatura fechada com sucesso.");
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "NÃ£o foi possÃ­vel fechar a fatura.",
+      );
+    } finally {
+      setUpdatingClosureInvoiceId(null);
+    }
+  }
+
+  async function handleReopenInvoice(invoiceId: string) {
+    try {
+      setUpdatingClosureInvoiceId(invoiceId);
+
+      const response = await fetch(`/api/invoices/${invoiceId}/reopen`, {
+        method: "PATCH",
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Erro ao reabrir fatura");
+      }
+
+      alert("Fatura reaberta com sucesso.");
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "NÃ£o foi possÃ­vel reabrir a fatura.",
+      );
+    } finally {
+      setUpdatingClosureInvoiceId(null);
     }
   }
 
@@ -1200,6 +1259,42 @@ export default function InvoicesPage() {
                     <div className="border-t border-slate-100">
                       {invoice.status === "OPEN" && (
                         <div className="bg-slate-50/80 p-3 md:p-5">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                              Fechamento manual
+                            </p>
+
+                            {invoice.closedAt ? (
+                              <button
+                                type="button"
+                                onClick={() => handleReopenInvoice(invoice.id)}
+                                disabled={
+                                  updatingClosureInvoiceId === invoice.id ||
+                                  payingInvoiceId === invoice.id
+                                }
+                                className="h-9 rounded-xl border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {updatingClosureInvoiceId === invoice.id
+                                  ? "Reabrindo..."
+                                  : "Reabrir fatura"}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleCloseInvoice(invoice.id)}
+                                disabled={
+                                  updatingClosureInvoiceId === invoice.id ||
+                                  payingInvoiceId === invoice.id
+                                }
+                                className="h-9 rounded-xl border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {updatingClosureInvoiceId === invoice.id
+                                  ? "Fechando..."
+                                  : "Fechar fatura"}
+                              </button>
+                            )}
+                          </div>
+
                           <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
                             Pagar com a conta
                           </label>
