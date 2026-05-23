@@ -5926,6 +5926,28 @@ const dataHealthSummary = useMemo(() => {
   }, [currentDebt, debtForecast.isCompleted, lastPayoffPromptDebtId]);
 
   const fixedPendingExpensesTotal = Number(monthlyRecurringProjection.fixedExpensesTotal || 0);
+  const monthlyRealResultSummary = useMemo(() => {
+    const expectedIncomes = Number(projectedMonthIncomeTotal || 0);
+    const nonCardFixedExpenses = monthlyRecurringProjection.fixedPendingExpenseItems
+      .filter(
+        (item) => normalizeComparableText(item.paymentMethod) !== "credit_card"
+      )
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const creditCardInvoices = Number(openInvoicesTotal || 0);
+    const realMonthResult =
+      expectedIncomes - nonCardFixedExpenses - creditCardInvoices;
+
+    return {
+      expectedIncomes,
+      nonCardFixedExpenses,
+      creditCardInvoices,
+      realMonthResult,
+    };
+  }, [
+    monthlyRecurringProjection.fixedPendingExpenseItems,
+    openInvoicesTotal,
+    projectedMonthIncomeTotal,
+  ]);
   const protectedPocketTotal = Number(cofrinho || 0);
 
   const safeBalance =
@@ -6121,61 +6143,72 @@ const dataHealthSummary = useMemo(() => {
           <div className="flex flex-col gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                O que está travando seu mês
+                Leitura do mês
               </p>
               <h2 className="mt-1 text-2xl font-black text-slate-950">
-                Compromissos antes de compras novas
+                Resultado real do mês
               </h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                O dashboard não usa limite de cartão como dinheiro disponível. Ele mostra o que precisa ser resolvido antes de você assumir qualquer gasto novo.
+                Entradas previstas - fixos fora do cartão - faturas do cartão.
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-3xl border border-rose-100 bg-rose-50 p-4">
-                <p className="text-xs font-black uppercase tracking-[0.16em] text-rose-400">
-                  Faturas abertas
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-500">
+                  Entradas previstas
                 </p>
-                <p className="mt-2 text-xl font-black text-rose-700">
-                  {formatCurrency(openInvoicesTotal)}
+                <p className="mt-2 text-xl font-black text-emerald-700">
+                  {formatCurrency(monthlyRealResultSummary.expectedIncomes)}
                 </p>
-                <p className="mt-1 text-xs leading-5 text-rose-700/80">
-                  Valor que já virou obrigação de pagamento.
+                <p className="mt-1 text-xs leading-5 text-emerald-700/80">
+                  Total previsto/pendente para entrar no mês.
                 </p>
               </div>
 
               <div className="rounded-3xl border border-amber-100 bg-amber-50 p-4">
                 <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-500">
-                  Fixos pendentes
+                  Fixos fora do cartão
                 </p>
                 <p className="mt-2 text-xl font-black text-amber-700">
-                  {formatCurrency(fixedPendingExpensesTotal)}
+                  {formatCurrency(monthlyRealResultSummary.nonCardFixedExpenses)}
                 </p>
                 <p className="mt-1 text-xs leading-5 text-amber-700/80">
-                  Contas previstas que ainda precisam caber no mês.
+                  Custos fixos pendentes pagos sem cartão.
+                </p>
+              </div>
+
+              <div className="rounded-3xl border border-rose-100 bg-rose-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-rose-400">
+                  Faturas do cartão
+                </p>
+                <p className="mt-2 text-xl font-black text-rose-700">
+                  {formatCurrency(monthlyRealResultSummary.creditCardInvoices)}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-rose-700/80">
+                  Valor aberto de faturas no cartão de crédito.
                 </p>
               </div>
 
               <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
-                  Cartão usado agora
+                  Resultado real
                 </p>
-                <p className="mt-2 text-xl font-black text-slate-950">
-                  {formatCurrency(selectedMonthCreditPurchasesTotal)}
+                <p
+                  className={`mt-2 text-xl font-black ${
+                    monthlyRealResultSummary.realMonthResult < 0
+                      ? "text-rose-700"
+                      : monthlyRealResultSummary.realMonthResult > 0
+                      ? "text-emerald-700"
+                      : "text-slate-950"
+                  }`}
+                >
+                  {formatCurrency(monthlyRealResultSummary.realMonthResult)}
                 </p>
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Compra nova no cartão vira pressão para a próxima fatura.
+                  Entradas previstas menos fixos fora do cartão e faturas.
                 </p>
               </div>
-            </div>
-
-            <div className="rounded-3xl border border-slate-200 bg-slate-950 p-4 text-white">
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                Regra do dashboard
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-200">
-                Se o saldo seguro está negativo, o app não deve falar de limite disponível. Ele deve te lembrar que o foco é pagar o que já existe e preservar dinheiro vivo.
-              </p>
             </div>
           </div>
         </section>
