@@ -637,13 +637,14 @@ export async function POST(req: Request) {
         const affectedInvoiceIds = new Set<string>();
 
         for (let i = 1; i <= totalInstallments; i++) {
+          const invoiceOffset = invoiceStartOffset + (i - 1);
           const installmentDate = new Date(parsedDate);
-          installmentDate.setMonth(parsedDate.getMonth() + (i - 1));
+          installmentDate.setMonth(parsedDate.getMonth() + invoiceOffset);
 
           const invoiceReference = addMonthsToReference(
             parsedDate.getFullYear(),
             parsedDate.getMonth() + 1,
-            invoiceStartOffset + (i - 1)
+            invoiceOffset
           );
 
           const invoice = await getOrCreateOpenInvoice(tx, {
