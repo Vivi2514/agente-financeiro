@@ -1027,6 +1027,23 @@ export default function TransactionsPage() {
   }, [transactions]);
 
   const displayedTransactions = useMemo(() => {
+    /*
+      Quando o usuário está navegando por um mês específico, a lista precisa
+      refletir a fatura daquele mês. Por isso, compras parceladas devem aparecer
+      como parcelas individuais: 1/7, 2/7, 3/7...
+
+      Antes, o app agrupava a primeira parcela visível e mostrava o valor total
+      da compra no mês em que a primeira parcela aparecia. Isso causava o erro
+      visual em compras feitas após fechamento da fatura: julho mostrava o valor
+      total da compra, enquanto agosto já mostrava 2/7.
+    */
+    if (selectedMonthValue) {
+      return filteredTransactions.map((transaction) => ({
+        transaction,
+        groupedPurchase: null,
+      }));
+    }
+
     const filteredIds = new Set(
       filteredTransactions.map((transaction) => transaction.id),
     );
@@ -1079,7 +1096,7 @@ export default function TransactionsPage() {
 
       return acc;
     }, []);
-  }, [filteredTransactions, purchaseGroupSummaries]);
+  }, [filteredTransactions, purchaseGroupSummaries, selectedMonthValue]);
 
   function clearFilters() {
     setSearchTerm("");
