@@ -316,6 +316,77 @@ function getMonthDifference(from: Date, to: Date) {
   return (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
 }
 
+function getInvoiceReferenceDate(invoice: Invoice) {
+  const dueDate = parseLocalDate(invoice.dueDate);
+
+  if (dueDate) {
+    return new Date(dueDate.getFullYear(), dueDate.getMonth(), 1);
+  }
+
+  return new Date(invoice.year, invoice.month - 1, 1);
+}
+
+function getClosedAnchorInvoiceForTransaction(
+  transaction: InvoiceTransaction,
+  invoices: Invoice[],
+) {
+  if (!transaction.cardId) return null;
+
+  const transactionDate = parseLocalDate(transaction.date);
+  if (!transactionDate) return null;
+
+  return invoices
+    .filter((invoice) => {
+      if (invoice.cardId !== transaction.cardId) return false;
+      if (!invoice.closedAt) return false;
+
+      const closedAt = parseLocalDate(invoice.closedAt);
+      if (!closedAt) return false;
+
+      return startOfDay(transactionDate).getTime() > startOfDay(closedAt).getTime();
+    })
+    .sort((a, b) => {
+      const aClosedAt = parseLocalDate(a.closedAt)?.getTime() || 0;
+      const bClosedAt = parseLocalDate(b.closedAt)?.getTime() || 0;
+      return bClosedAt - aClosedAt;
+    })[0] || null;
+}
+
+function getInvoiceTransactionDisplayTitle(
+  transaction: InvoiceTransaction,
+  invoice: Invoice,
+  invoices: Invoice[],
+) {
+  const installmentInfo = getInstallmentInfoFromTitle(transaction.title);
+
+  if (!installmentInfo) {
+    return transaction.title;
+  }
+
+  const anchorInvoice = getClosedAnchorInvoiceForTransaction(transaction, invoices);
+
+  if (!anchorInvoice) {
+    return transaction.title;
+  }
+
+  const anchorReferenceDate = getInvoiceReferenceDate(anchorInvoice);
+  const invoiceReferenceDate = getInvoiceReferenceDate(invoice);
+  const correctedInstallmentNumber = getMonthDifference(
+    anchorReferenceDate,
+    invoiceReferenceDate,
+  );
+
+  if (
+    correctedInstallmentNumber < 1 ||
+    correctedInstallmentNumber > installmentInfo.total ||
+    correctedInstallmentNumber === installmentInfo.current
+  ) {
+    return transaction.title;
+  }
+
+  return `${getBaseInstallmentTitle(transaction.title)} (${correctedInstallmentNumber}/${installmentInfo.total})`;
+}
+
 function getProjectionAnchorInvoice(cardId: string, invoices: Invoice[]) {
   return invoices
     .filter((invoice) => invoice.cardId === cardId && Boolean(invoice.closedAt))
@@ -1373,7 +1444,7 @@ export default function InvoicesPage() {
                                   <div className="flex items-center justify-between gap-3">
                                     <div className="min-w-0">
                                       <p className="truncate text-sm font-semibold text-slate-900">
-                                        {transaction.title}
+                                        {getInvoiceTransactionDisplayTitle(transaction, invoice, invoices)}
                                       </p>
                                       <p className="mt-0.5 text-xs text-slate-500">
                                         {getInvoiceTransactionCategoryLabel(
