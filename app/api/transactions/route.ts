@@ -214,26 +214,6 @@ function addMonthsToReference(year: number, month: number, monthsToAdd: number) 
   };
 }
 
-
-function buildInstallmentDateFromInvoiceReference(
-  originalPurchaseDate: Date,
-  invoiceReference: { month: number; year: number }
-) {
-  const day = originalPurchaseDate.getDate();
-  const daysInInvoiceMonth = new Date(
-    invoiceReference.year,
-    invoiceReference.month,
-    0
-  ).getDate();
-
-  return new Date(
-    invoiceReference.year,
-    invoiceReference.month - 1,
-    Math.min(day, daysInInvoiceMonth),
-    12
-  );
-}
-
 async function getInvoiceStartOffsetForCreditPurchase(
   tx: Prisma.TransactionClient,
   params: {
@@ -246,7 +226,7 @@ async function getInvoiceStartOffsetForCreditPurchase(
   const purchaseMonth = purchaseDate.getMonth() + 1;
   const purchaseYear = purchaseDate.getFullYear();
 
-  const currentInvoice = await tx.invoice.findFirst({
+  const currentMonthInvoice = await tx.invoice.findFirst({
     where: {
       userId,
       cardId,
@@ -260,15 +240,44 @@ async function getInvoiceStartOffsetForCreditPurchase(
     },
   });
 
-  if (!currentInvoice) {
-    return 0;
-  }
-
-  if (currentInvoice.status === InvoiceStatus.PAID) {
+  if (currentMonthInvoice?.status === InvoiceStatus.PAID) {
     return 1;
   }
 
-  if (currentInvoice.closedAt) {
+  if (currentMonthInvoice?.closedAt) {
+    return 1;
+  }
+
+  const latestClosedInvoice = await tx.invoice.findFirst({
+    where: {
+      userId,
+      cardId,
+      closedAt: {
+        not: null,
+      },
+      status: InvoiceStatus.OPEN,
+    },
+    orderBy: {
+      closedAt: "desc",
+    },
+    select: {
+      id: true,
+      closedAt: true,
+    },
+  });
+
+  if (!latestClosedInvoice?.closedAt) {
+    return 0;
+  }
+
+  const closedAt = startOfDay(new Date(latestClosedInvoice.closedAt));
+  const purchaseDay = startOfDay(purchaseDate);
+
+  if (Number.isNaN(closedAt.getTime())) {
+    return 0;
+  }
+
+  if (purchaseDay.getTime() >= closedAt.getTime()) {
     return 1;
   }
 
@@ -658,16 +667,13 @@ export async function POST(req: Request) {
 
         for (let i = 1; i <= totalInstallments; i++) {
           const invoiceOffset = invoiceStartOffset + (i - 1);
+          const installmentDate = new Date(parsedDate);
+          installmentDate.setMonth(parsedDate.getMonth() + invoiceOffset);
 
           const invoiceReference = addMonthsToReference(
             parsedDate.getFullYear(),
             parsedDate.getMonth() + 1,
             invoiceOffset
-          );
-
-          const installmentDate = buildInstallmentDateFromInvoiceReference(
-            parsedDate,
-            invoiceReference
           );
 
           const invoice = await getOrCreateOpenInvoice(tx, {
