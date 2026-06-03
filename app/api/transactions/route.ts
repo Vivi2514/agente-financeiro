@@ -214,6 +214,26 @@ function addMonthsToReference(year: number, month: number, monthsToAdd: number) 
   };
 }
 
+
+function buildInstallmentDateFromInvoiceReference(
+  originalPurchaseDate: Date,
+  invoiceReference: { month: number; year: number }
+) {
+  const day = originalPurchaseDate.getDate();
+  const daysInInvoiceMonth = new Date(
+    invoiceReference.year,
+    invoiceReference.month,
+    0
+  ).getDate();
+
+  return new Date(
+    invoiceReference.year,
+    invoiceReference.month - 1,
+    Math.min(day, daysInInvoiceMonth),
+    12
+  );
+}
+
 async function getInvoiceStartOffsetForCreditPurchase(
   tx: Prisma.TransactionClient,
   params: {
@@ -638,13 +658,16 @@ export async function POST(req: Request) {
 
         for (let i = 1; i <= totalInstallments; i++) {
           const invoiceOffset = invoiceStartOffset + (i - 1);
-          const installmentDate = new Date(parsedDate);
-          installmentDate.setMonth(parsedDate.getMonth() + invoiceOffset);
 
           const invoiceReference = addMonthsToReference(
             parsedDate.getFullYear(),
             parsedDate.getMonth() + 1,
             invoiceOffset
+          );
+
+          const installmentDate = buildInstallmentDateFromInvoiceReference(
+            parsedDate,
+            invoiceReference
           );
 
           const invoice = await getOrCreateOpenInvoice(tx, {
