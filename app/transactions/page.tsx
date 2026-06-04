@@ -217,6 +217,16 @@ function toDateInputValue(date?: string) {
   return localDate.toISOString().slice(0, 10);
 }
 
+function formatDateBR(value?: string | null) {
+  if (!value) return "-";
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) return "-";
+
+  return parsed.toLocaleDateString("pt-BR");
+}
+
 function normalizeTransactionType(
   value?: string | null,
 ): "income" | "expense" | "" {
@@ -2071,6 +2081,10 @@ export default function TransactionsPage() {
 
                     const transactionDate =
                       transaction.date || transaction.createdAt;
+                    const originalPurchaseDate =
+                      transaction.purchaseGroupId && transaction.createdAt
+                        ? transaction.createdAt
+                        : null;
                     const normalizedType = normalizeTransactionType(
                       transaction.type,
                     );
@@ -2474,14 +2488,22 @@ export default function TransactionsPage() {
                                   </p>
                                 )}
 
-                                <p>
-                                  Data:{" "}
-                                  {transactionDate
-                                    ? new Date(
-                                        transactionDate,
-                                      ).toLocaleDateString("pt-BR")
-                                    : "-"}
-                                </p>
+                                {isInstallment ? (
+                                  <>
+                                    <p>
+                                      Compra feita em:{" "}
+                                      {formatDateBR(originalPurchaseDate || transactionDate)}
+                                    </p>
+                                    <p>
+                                      Parcela/fatura:{" "}
+                                      {formatDateBR(transactionDate)}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <p>
+                                    Data: {formatDateBR(transactionDate)}
+                                  </p>
+                                )}
                               </div>
                             </div>
 
